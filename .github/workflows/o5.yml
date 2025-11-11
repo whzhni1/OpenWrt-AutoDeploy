@@ -16,6 +16,7 @@ jobs:
       - name: Create or Get Release
         id: release
         run: |
+          # 尝试创建 Release
           RESPONSE=$(curl -s -w "%{http_code}" -o response.json \
             -X POST https://api.gitcode.com/api/v5/repos/whzhni/test-release/releases \
             -H "Content-Type: application/json" \
