@@ -1,7 +1,7 @@
 name: Upload to GitCode Release
 
 on:
-  workflow_dispatch:   # 手动触发，也可以改成 push/tag 触发
+  workflow_dispatch:
 
 jobs:
   release:
@@ -13,19 +13,29 @@ jobs:
       - name: Generate test file
         run: echo "Hello GitCode Release" > demo.txt
 
-      - name: Create Release on GitCode
-        id: create_release
+      - name: Create or Get Release
+        id: release
         run: |
-          RESPONSE=$(curl -s -X POST https://api.gitcode.com/api/v5/repos/whzhni/test-release/releases \
+          RESPONSE=$(curl -s -w "%{http_code}" -o response.json \
+            -X POST https://api.gitcode.com/api/v5/repos/whzhni/test-release/releases \
             -H "Content-Type: application/json" \
             -H "PRIVATE-TOKEN: ${{ secrets.GITCODE_TOKEN }}" \
             -d '{
               "tag_name": "v1.0.0",
               "name": "Release v1.0.0",
-              "body": "这是一个测试 Release"
+              "body": "自动创建的 Release"
             }')
-          echo "$RESPONSE"
-          RELEASE_ID=$(echo $RESPONSE | jq -r '.id')
+
+          if [ "$RESPONSE" -eq 201 ]; then
+            RELEASE_ID=$(jq -r '.id' response.json)
+          else
+            # 如果已存在，查询该标签对应的 Release
+            RELEASE_ID=$(curl -s \
+              -H "PRIVATE-TOKEN: ${{ secrets.GITCODE_TOKEN }}" \
+              https://api.gitcode.com/api/v5/repos/whzhni/test-release/releases \
+              | jq -r '.[] | select(.tag_name=="v1.0.0") | .id')
+          fi
+
           echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
 
       - name: Upload file to GitCode Release
