@@ -25,7 +25,7 @@ on:
       username:
         description: '用户名（留空使用默认）'
         required: false
-        default: ''
+        default: 'whzhni'
 
 jobs:
   release:
