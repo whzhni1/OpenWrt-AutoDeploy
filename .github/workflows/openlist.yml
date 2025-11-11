@@ -245,33 +245,42 @@ jobs:
 
       - name: 整理文件到 release-files 目录
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 整理编译文件: ${{ matrix.project.local_name }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # 创建统一的输出目录
-          mkdir -p release-files
-          
+         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+         echo "📦 整理编译文件: ${{ matrix.project.local_name }}"
+         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+         mkdir -p release-files
+    
           IPK_COUNT=0
           APK_COUNT=0
-          
-          # 遍历所有下载的 artifact
+    
           for artifact_dir in artifacts/${{ matrix.project.local_name }}-*/; do
             if [ ! -d "$artifact_dir" ]; then
               continue
             fi
-            
+      
             artifact_name=$(basename "$artifact_dir")
-            echo "处理: $artifact_name"
-            
-            # 复制 IPK 文件
+      
+            # 从 artifact 名称提取架构信息
+            # 格式: openlist2-aarch64_cortex-a53-openwrt-24.10
+            arch=$(echo "$artifact_name" | sed 's/^${{ matrix.project.local_name }}-//' | sed 's/-openwrt-24.10$//' | sed 's/-SNAPSHOT$//')
+      
+            echo "处理: $artifact_name (架构: $arch)"
+      
+            # ============ 处理 IPK 文件 ============
             while IFS= read -r file; do
               if [ -f "$file" ]; then
                 filename=$(basename "$file")
-                
-                # 避免重复复制 _all.ipk
-                if [[ "$filename" == *"_all.ipk" ]] && [ -f "release-files/$filename" ]; then
-                  echo "  跳过: $filename (已存在)"
+          
+                # _all.ipk 只复制一次
+                if [[ "$filename" == *"_all.ipk" ]]; then
+                  if [ -f "release-files/$filename" ]; then
+                    echo "  ⏭️  IPK (跳过): $filename"
+                  else
+                    cp "$file" release-files/
+                    echo "  ✅ IPK: $filename"
+                    IPK_COUNT=$((IPK_COUNT + 1))
+                  fi
                 else
                   cp "$file" release-files/
                   echo "  ✅ IPK: $filename"
@@ -279,111 +288,139 @@ jobs:
                 fi
               fi
             done < <(find "$artifact_dir" -type f -name "*.ipk" 2>/dev/null)
-            
-            # 复制 APK 文件
+      
+            # ============ 处理 APK 文件（加架构命名）============
             while IFS= read -r file; do
               if [ -f "$file" ]; then
-                filename=$(basename "$file")
-                
-                # luci-app 和 luci-i18n 是架构无关的，避免重复
-                if [[ "$filename" == luci-* ]]; then
-                  if [ -f "release-files/$filename" ]; then
-                    echo "  跳过: $filename (已存在)"
-                    continue
+                original_filename=$(basename "$file")
+          
+                # luci-app 和 luci-i18n 是架构无关的（_all）
+                if [[ "$original_filename" == luci-* ]]; then
+                  if [ -f "release-files/$original_filename" ]; then
+                    echo "  ⏭️  APK (跳过): $original_filename"
+                  else
+                    cp "$file" release-files/
+                    echo "  ✅ APK (通用): $original_filename"
+                    APK_COUNT=$((APK_COUNT + 1))
                   fi
+                else
+                  # 🔧 修复：APK 文件也加架构命名
+                  base_name="${original_filename%.apk}"
+                  new_filename="${base_name}_${arch}.apk"
+            
+                  cp "$file" "release-files/$new_filename"
+                  echo "  ✅ APK: $new_filename"
+                  APK_COUNT=$((APK_COUNT + 1))
                 fi
-                
-                cp "$file" release-files/
-                echo "  ✅ APK: $filename"
-                APK_COUNT=$((APK_COUNT + 1))
               fi
             done < <(find "$artifact_dir" -type f -name "*.apk" 2>/dev/null)
+      
+            echo ""
           done
-          
-          echo ""
+    
+          # 最终统计
+          FINAL_IPK=$(find release-files -type f -name "*.ipk" 2>/dev/null | wc -l)
+          FINAL_APK=$(find release-files -type f -name "*.apk" 2>/dev/null | wc -l)
+          TOTAL_FILES=$((FINAL_IPK + FINAL_APK))
+    
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📊 文件统计"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "IPK: $IPK_COUNT 个"
-          echo "APK: $APK_COUNT 个"
-          echo "总计: $((IPK_COUNT + APK_COUNT)) 个"
+          echo "IPK: $FINAL_IPK 个"
+          echo "APK: $FINAL_APK 个"
+          echo "总计: $TOTAL_FILES 个"
           echo ""
-          
-          # 列出所有文件（用空格分隔，传递给脚本）
-          find release-files -type f \( -name "*.ipk" -o -name "*.apk" \) | sort
+    
+          echo "示例文件（前 20 个）:"
+          find release-files -type f | head -20 | xargs -r -I {} basename {}
+          echo ""
 
-      - name: 🚀 并行发布到 GitCode 和 Gitee
+      - name: 🚀 发布到 GitCode 和 Gitee
         env:
-          # GitCode 配置
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITCODE_USERNAME: ${{ secrets.GITCODE_USERNAME || 'whzhni' }}
-          
-          # Gitee 配置
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_USERNAME: ${{ secrets.GITEE_USERNAME || 'whzhni' }}
-          
-          # 共同参数
           REPO_NAME: ${{ matrix.project.local_name }}
           TAG_NAME: ${{ matrix.project.version }}
           RELEASE_TITLE: "${{ matrix.project.local_name }} ${{ matrix.project.version }}"
-          RELEASE_BODY: |
-            ## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }}
-            
-            ### 📌 项目信息
-            - 项目名称: ${{ matrix.project.github_repo }}
-            - 项目版本: ${{ matrix.project.version }}
-            - 上游仓库: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
-            - 上游地址: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}/releases/tag/${{ matrix.project.version }}
-            
-            ### 🔨 构建信息
-            - 构建时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')
-            - 工作流运行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            - 架构数量: 33 个
-            - SDK 版本: OpenWrt 24.10 + SNAPSHOT
         run: |
-          # 生成文件列表（空格分隔）
+          # 🔧 修复问题3：动态生成构建时间
+          BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')
+    
+          # 生成 Release Body
+          RELEASE_BODY="## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }}
+
+          ### 📌 项目信息
+          - 项目名称: ${{ matrix.project.github_repo }}
+          - 项目版本: ${{ matrix.project.version }}
+          - 上游仓库: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
+          - 上游地址: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}/releases/tag/${{ matrix.project.version }}
+
+          ### 🔨 构建信息
+          - 构建时间: ${BUILD_TIME} (北京时间)
+          - 工作流运行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - SDK 版本: OpenWrt 24.10 + SNAPSHOT"
+    
+          # 生成文件列表
           UPLOAD_FILES=$(find release-files -type f \( -name "*.ipk" -o -name "*.apk" \) | tr '\n' ' ')
-          
-          echo "准备发布文件数量: $(echo $UPLOAD_FILES | wc -w)"
-          
-          # 并行发布到两个平台
-          (
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🚀 发布到 GitCode"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            
-            GITCODE_TOKEN="$GITCODE_TOKEN" \
-            USERNAME="$GITCODE_USERNAME" \
-            REPO_NAME="$REPO_NAME" \
-            TAG_NAME="$TAG_NAME" \
-            RELEASE_TITLE="$RELEASE_TITLE" \
-            RELEASE_BODY="$RELEASE_BODY" \
-            UPLOAD_FILES="$UPLOAD_FILES" \
-            .github/workflows/scripts/release-GitCode.sh
-          ) &
-          
-          (
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🚀 发布到 Gitee"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            
-            GITEE_TOKEN="$GITEE_TOKEN" \
-            USERNAME="$GITEE_USERNAME" \
-            REPO_NAME="$REPO_NAME" \
-            TAG_NAME="$TAG_NAME" \
-            RELEASE_TITLE="$RELEASE_TITLE" \
-            RELEASE_BODY="$RELEASE_BODY" \
-            UPLOAD_FILES="$UPLOAD_FILES" \
-            .github/workflows/scripts/release-gitee.sh
-          ) &
-          
-          # 等待两个进程都完成
-          wait
-          
+    
+          echo "准备发布"
+          echo "文件数量: $(echo $UPLOAD_FILES | wc -w)"
+          echo "构建时间: $BUILD_TIME"
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ 并行发布完成"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+          # 第一步：发布到 GitCode
+          echo "🚀 发布到 GitCode"
+    
+          GITCODE_TOKEN="$GITCODE_TOKEN" \
+          USERNAME="$GITCODE_USERNAME" \
+          REPO_NAME="$REPO_NAME" \
+          TAG_NAME="$TAG_NAME" \
+          RELEASE_TITLE="$RELEASE_TITLE" \
+          RELEASE_BODY="$RELEASE_BODY" \
+          UPLOAD_FILES="$UPLOAD_FILES" \
+          .github/workflows/scripts/release-GitCode.sh
+    
+          GITCODE_STATUS=$?
+          
+          if [ $GITCODE_STATUS -eq 0 ]; then
+            echo "✅ GitCode 发布成功"
+          else
+            echo "❌ GitCode 发布失败"
+          fi
+          echo ""
+    
+          # 第二步：发布到 Gitee（等待 GitCode 完成后）
+      
+          echo "🚀 发布到 Gitee"
+          GITEE_TOKEN="$GITEE_TOKEN" \
+          USERNAME="$GITEE_USERNAME" \
+          REPO_NAME="$REPO_NAME" \
+          TAG_NAME="$TAG_NAME" \
+          RELEASE_TITLE="$RELEASE_TITLE" \
+          RELEASE_BODY="$RELEASE_BODY" \
+          UPLOAD_FILES="$UPLOAD_FILES" \
+          .github/workflows/scripts/release-gitee.sh
+    
+          GITEE_STATUS=$?
+    
+          if [ $GITEE_STATUS -eq 0 ]; then
+            echo "✅ Gitee 发布成功"
+          else
+            echo "❌ Gitee 发布失败"
+          fi
+    
+          echo ""
+          echo "📊 发布结果"
+          echo "GitCode: $([ $GITCODE_STATUS -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
+          echo "Gitee:   $([ $GITEE_STATUS -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
+    
+          # 如果两个都失败，退出码为1
+          if [ $GITCODE_STATUS -ne 0 ] && [ $GITEE_STATUS -ne 0 ]; then
+            echo "::error::两个平台都发布失败"
+            exit 1
+          fi
 
       - name: 更新版本记录到 version.txt
         run: |
