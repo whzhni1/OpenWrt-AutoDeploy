@@ -12,7 +12,6 @@ RELEASE_TITLE="${RELEASE_TITLE:-Release ${TAG_NAME}}"
 RELEASE_BODY="${RELEASE_BODY:-Release ${TAG_NAME}}"
 BRANCH="${BRANCH:-main}"
 UPLOAD_FILES="${UPLOAD_FILES:-}"
-DEBUG="${DEBUG:-false}"
 
 API_BASE="https://gitcode.com/api/v5"
 REPO_PATH="${USERNAME}/${REPO_NAME}"
@@ -28,7 +27,7 @@ log_info() { echo -e "${CYAN}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}[✓]${NC} $*"; }
 log_warning() { echo -e "${YELLOW}[!]${NC} $*"; }
 log_error() { echo -e "${RED}[✗]${NC} $*"; }
-log_debug() { [ "$DEBUG" = "true" ] && echo -e "${BLUE}[DEBUG]${NC} $*"; }
+log_debug() { echo -e "${BLUE}[DEBUG]${NC} $*"; }
 
 api_get() {
     local endpoint="$1"
@@ -79,149 +78,104 @@ api_delete() {
     [ "$http_code" -eq 204 ] || [ "$http_code" -eq 200 ] || [ "$http_code" -eq 404 ]
 }
 
-# 尝试多种方式获取上传 URL
-get_upload_url() {
-    local filename="$1"
-    
-    log_info "尝试获取上传 URL..."
-    
-    # 方式1: access_token in query
-    log_debug "方式1: access_token query 参数"
-    local url1="${API_BASE}/repos/${USERNAME}/${REPO_NAME}/releases/${TAG_NAME}/upload_url?access_token=${GITCODE_TOKEN}&file_name=${filename}"
-    
-    response=$(curl -s -w "\n%{http_code}" "$url1")
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | sed '$d')
-    
-    log_debug "HTTP $http_code: ${body:0:200}"
-    
-    if [ "$http_code" -eq 200 ]; then
-        log_success "方式1成功"
-        echo "$body"
-        return 0
-    fi
-    
-    # 方式2: PRIVATE-TOKEN header (GitLab style)
-    log_debug "方式2: PRIVATE-TOKEN header"
-    local url2="${API_BASE}/repos/${USERNAME}/${REPO_NAME}/releases/${TAG_NAME}/upload_url?file_name=${filename}"
-    
-    response=$(curl -s -w "\n%{http_code}" \
-        -H "PRIVATE-TOKEN: ${GITCODE_TOKEN}" \
-        "$url2")
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | sed '$d')
-    
-    log_debug "HTTP $http_code: ${body:0:200}"
-    
-    if [ "$http_code" -eq 200 ]; then
-        log_success "方式2成功"
-        echo "$body"
-        return 0
-    fi
-    
-    # 方式3: Authorization Bearer
-    log_debug "方式3: Authorization Bearer"
-    
-    response=$(curl -s -w "\n%{http_code}" \
-        -H "Authorization: Bearer ${GITCODE_TOKEN}" \
-        "$url2")
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | sed '$d')
-    
-    log_debug "HTTP $http_code: ${body:0:200}"
-    
-    if [ "$http_code" -eq 200 ]; then
-        log_success "方式3成功"
-        echo "$body"
-        return 0
-    fi
-    
-    # 方式4: Authorization token (Gitee style)
-    log_debug "方式4: Authorization token"
-    
-    response=$(curl -s -w "\n%{http_code}" \
-        -H "Authorization: token ${GITCODE_TOKEN}" \
-        "$url2")
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | sed '$d')
-    
-    log_debug "HTTP $http_code: ${body:0:200}"
-    
-    if [ "$http_code" -eq 200 ]; then
-        log_success "方式4成功"
-        echo "$body"
-        return 0
-    fi
-    
-    # 所有方式都失败
-    log_error "所有认证方式均失败"
-    echo ""
-    echo "错误详情:"
-    echo "$body"
-    echo ""
-    echo "可能的原因:"
-    echo "1. Token 缺少特定权限（虽然界面显示已勾选全部）"
-    echo "2. GitCode API 的这个功能可能有限制或 bug"
-    echo "3. 需要联系 GitCode 支持确认权限配置"
-    echo ""
-    echo "建议操作:"
-    echo "1. 访问 GitCode 设置 → 访问令牌"
-    echo "2. 删除现有 Token，重新创建"
-    echo "3. 确保勾选了所有项目相关权限"
-    echo "4. 或者联系 GitCode 技术支持"
-    
-    return 1
-}
-
 upload_file_to_release() {
     local file="$1"
     local filename=$(basename "$file")
     
     log_info "上传: $filename ($(du -h "$file" | cut -f1))"
     
-    # 获取上传 URL
-    upload_info=$(get_upload_url "$filename")
+    # 尝试获取上传 URL
+    log_debug "请求上传 URL..."
     
-    if [ $? -ne 0 ]; then
+    local url="${API_BASE}/repos/${USERNAME}/${REPO_NAME}/releases/${TAG_NAME}/upload_url?access_token=${GITCODE_TOKEN}&file_name=${filename}"
+    
+    response=$(curl -s -w "\n%{http_code}" "$url")
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | sed '$d')
+    
+    log_debug "HTTP Code: $http_code"
+    
+    # 显示完整响应
+    if [ "$http_code" -ne 200 ]; then
+        log_error "获取上传 URL 失败"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "API 响应详情:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "$body" | head -20
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        # 分析错误
+        if echo "$body" | grep -q "no scopes:all_projects"; then
+            echo "❌ 错误原因: Token 缺少 'all_projects' scope"
+            echo ""
+            echo "GitCode API 文档说明该接口需要特殊权限，"
+            echo "但 GitCode 网页令牌设置中可能没有提供这个选项。"
+            echo ""
+            echo "这可能是 GitCode 平台的限制："
+            echo "- Release 附件上传功能可能仅对特定用户开放"
+            echo "- 或者该 API 接口尚未完全开放"
+            echo ""
+        elif echo "$body" | grep -q "FORBIDDEN\|403"; then
+            echo "❌ 错误原因: 权限不足 (403 Forbidden)"
+            echo ""
+        elif echo "$body" | grep -q "NOT_FOUND\|404"; then
+            echo "❌ 错误原因: 接口不存在 (404 Not Found)"
+            echo ""
+            echo "可能的原因:"
+            echo "- Release 尚未完全创建"
+            echo "- API 路径不正确"
+            echo "- 该功能未对你的账号开放"
+            echo ""
+        fi
+        
+        echo "建议操作:"
+        echo "1. 访问 GitCode 官方文档确认 API 可用性"
+        echo "2. 联系 GitCode 技术支持询问权限配置"
+        echo "3. 暂时使用网页手动上传附件:"
+        echo "   https://gitcode.com/${REPO_PATH}/releases"
+        echo ""
+        
         return 1
     fi
     
-    # 提取 URL
-    if command -v jq &> /dev/null; then
-        upload_url=$(echo "$upload_info" | jq -r '.url // empty')
-    else
-        upload_url=$(echo "$upload_info" | grep -o '"url":"[^"]*"' | head -1 | cut -d'"' -f4)
+    # 检查响应是否为有效 JSON
+    if ! echo "$body" | jq empty 2>/dev/null; then
+        log_error "响应不是有效的 JSON"
+        echo ""
+        echo "响应内容:"
+        echo "$body"
+        return 1
     fi
+    
+    # 提取上传 URL
+    upload_url=$(echo "$body" | jq -r '.url // empty')
     
     if [ -z "$upload_url" ]; then
-        log_error "无法提取上传 URL"
-        log_debug "响应: $upload_info"
+        log_error "响应中没有 url 字段"
+        echo ""
+        echo "完整响应:"
+        echo "$body" | jq . 2>/dev/null || echo "$body"
         return 1
     fi
     
-    log_debug "上传 URL: ${upload_url:0:50}..."
-    log_info "执行 PUT 上传..."
+    log_debug "上传 URL: ${upload_url:0:60}..."
+    log_info "执行上传..."
     
     # 上传文件
-    response=$(curl -s -w "\n%{http_code}" -X PUT \
+    upload_response=$(curl -s -w "\n%{http_code}" -X PUT \
         -H "Content-Type: application/octet-stream" \
         --data-binary "@${file}" \
         "$upload_url")
     
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | sed '$d')
+    upload_http_code=$(echo "$upload_response" | tail -n1)
     
-    log_debug "上传响应 HTTP $http_code"
-    
-    if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 201 ] || [ "$http_code" -eq 204 ]; then
+    if [ "$upload_http_code" -eq 200 ] || [ "$upload_http_code" -eq 201 ] || [ "$upload_http_code" -eq 204 ]; then
         log_success "上传成功"
         return 0
     else
-        log_error "上传失败 (HTTP $http_code)"
-        log_debug "响应: ${body:0:300}"
+        log_error "上传失败 (HTTP $upload_http_code)"
         return 1
     fi
 }
@@ -236,22 +190,6 @@ check_token() {
     fi
     
     log_success "Token 已配置"
-    
-    # 测试 Token 有效性
-    log_info "测试 Token 权限..."
-    
-    user_info=$(api_get "/user" 2>&1)
-    
-    if echo "$user_info" | grep -q '"login"'; then
-        if command -v jq &> /dev/null; then
-            user_login=$(echo "$user_info" | jq -r '.login')
-            log_success "Token 有效 (用户: $user_login)"
-        else
-            log_success "Token 有效"
-        fi
-    else
-        log_warning "Token 可能权限不足"
-    fi
 }
 
 ensure_repository() {
@@ -344,7 +282,6 @@ cleanup_old_tags() {
         [ -z "$tag" ] || [ "$tag" = "$TAG_NAME" ] && continue
         
         if ! echo "$tag" | grep -qE '^(v[0-9]|[0-9])'; then
-            log_debug "跳过无效标签: $tag"
             continue
         fi
         
@@ -385,6 +322,10 @@ create_release() {
     
     if echo "$response" | grep -q "\"tag_name\":\"${TAG_NAME}\""; then
         log_success "Release 创建成功"
+        
+        # 等待 Release 完全创建
+        log_info "等待 Release 初始化..."
+        sleep 3
     else
         log_error "创建失败"
         exit 1
@@ -393,7 +334,7 @@ create_release() {
 
 upload_files() {
     echo ""
-    log_info "步骤 5/5: 上传文件到 Release 附件"
+    log_info "步骤 5/5: 上传文件到 Release"
     
     if [ -z "$UPLOAD_FILES" ]; then
         log_info "没有文件需要上传"
@@ -422,20 +363,37 @@ upload_files() {
             uploaded=$((uploaded + 1))
         else
             failed=$((failed + 1))
+            # 第一个失败后就停止，避免重复显示错误
+            break
         fi
     done
     
     echo ""
     
-    if [ $uploaded -gt 0 ]; then
-        log_success "上传完成: $uploaded 成功, $failed 失败"
+    if [ $uploaded -eq $total ]; then
+        log_success "全部上传成功: $uploaded/$total"
+    elif [ $uploaded -gt 0 ]; then
+        log_warning "部分上传成功: $uploaded/$total"
     else
-        log_error "所有文件上传失败"
+        log_error "上传失败"
         echo ""
-        echo "请尝试以下操作:"
-        echo "1. 重新生成 GitCode Token"
-        echo "2. 联系 GitCode 支持确认 API 权限问题"
-        echo "3. 或手动在网页上传文件: https://gitcode.com/${REPO_PATH}/releases"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "GitCode Release 附件上传功能当前不可用"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "根据错误信息，GitCode API 需要 'all_projects' scope，"
+        echo "但令牌设置页面并未提供此选项。"
+        echo ""
+        echo "这可能意味着:"
+        echo "• Release 附件上传功能尚未对普通用户开放"
+        echo "• 需要企业版或特殊权限"
+        echo "• API 文档与实际实现不一致"
+        echo ""
+        echo "建议:"
+        echo "1. 手动上传: https://gitcode.com/${REPO_PATH}/releases"
+        echo "2. 联系 GitCode 支持"
+        echo "3. 或使用 GitHub/Gitee 作为主要发布平台"
+        echo ""
     fi
 }
 
@@ -462,7 +420,6 @@ main() {
     echo ""
     echo "仓库: ${REPO_PATH}"
     echo "标签: ${TAG_NAME}"
-    echo "调试模式: ${DEBUG}"
     
     check_token
     ensure_repository
