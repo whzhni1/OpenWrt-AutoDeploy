@@ -105,7 +105,8 @@ upload_file_to_repo() {
     
     if echo "$response" | grep -q '"sha"'; then
         log_success "上传成功"
-        echo "https://gitcode.com/${REPO_PATH}/raw/${BRANCH}/${file_path}"
+        # 正确的 GitCode raw 文件下载链接格式
+        echo "https://raw.gitcode.com/${REPO_PATH}/raw/${BRANCH}/${file_path}"
         return 0
     else
         log_error "上传失败"
@@ -273,6 +274,7 @@ upload_files() {
             uploaded=$((uploaded + 1))
             FILE_LINKS="${FILE_LINKS}- [📦 ${filename}](${download_url})
 "
+            log_debug "下载链接: $download_url"
         else
             failed=$((failed + 1))
         fi
@@ -351,8 +353,8 @@ main() {
     ensure_repository
     ensure_branch
     cleanup_old_tags
-    upload_files          # 先上传文件
-    create_release        # 再创建 Release（包含文件链接）
+    upload_files
+    create_release
     verify_release
     
     echo ""
