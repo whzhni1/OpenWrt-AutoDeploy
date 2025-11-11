@@ -54,16 +54,6 @@ api_put() {
         "${API_BASE}${endpoint}"
 }
 
-api_patch() {
-    local endpoint="$1"
-    local data="$2"
-    curl -s -X PATCH \
-        -H "Content-Type: application/json" \
-        -H "PRIVATE-TOKEN: ${GITCODE_TOKEN}" \
-        -d "$data" \
-        "${API_BASE}${endpoint}"
-}
-
 api_delete() {
     local endpoint="$1"
     curl -s -o /dev/null -w "%{http_code}" -X DELETE \
@@ -140,30 +130,83 @@ update_release_description() {
     echo ""
     log_info "更新 Release 描述..."
     
+    # 获取 Release 信息以获得 ID
+    local rel_info=$(api_get "/repos/${REPO_PATH}/releases/tags/${TAG_NAME}")
+    
+    local rel_id=""
+    if command -v jq &>/dev/null; then
+        rel_id=$(echo "$rel_info" | jq -r '.id // empty')
+    else
+        rel_id=$(echo "$rel_info" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+    fi
+    
+    if [ -z "$rel_id" ]; then
+        log_error "无法获取 Release ID"
+        log_debug "响应: ${rel_info:0:200}"
+        return 1
+    fi
+    
+    log_debug "Release ID: $rel_id"
+    
     # 构建新的描述
     local new_body="${RELEASE_BODY}
 
 ## 📥 下载文件
 
 ${file_links}
-
 > 💡 **提示**: 点击文件名即可下载"
     
-    # 转义 JSON
-    local new_body_escaped=$(echo "$new_body" | jq -Rs .)
+    # 使用 form-data 格式（官方文档要求）
+    local response=$(curl -s -X PATCH \
+        -H "PRIVATE-TOKEN: ${GITCODE_TOKEN}" \
+        -F "tag_name=${TAG_NAME}" \
+        -F "name=${RELEASE_TITLE}" \
+        -F "body=${new_body}" \
+        "${API_BASE}/repos/${REPO_PATH}/releases/${rel_id}")
     
-    # 使用 PATCH 更新 Release（参照示例代码）
-    local response=$(api_patch "/repos/${REPO_PATH}/releases/tags/${TAG_NAME}" "{
-        \"tag_name\":\"${TAG_NAME}\",
-        \"name\":\"${RELEASE_TITLE}\",
-        \"body\":${new_body_escaped}
-    }")
+    if echo "$response" | grep -q "\"tag_name\":\"${TAG_NAME}\""; then
+        log_success "Release 描述已更新"
+        return 0
+    fi
+    
+    # 如果 PATCH 失败，尝试用 JSON 格式的 PATCH
+    log_debug "尝试 JSON 格式..."
+    
+    local body_json=$(echo "$new_body" | jq -Rs .)
+    
+    response=$(curl -s -X PATCH \
+        -H "Content-Type: application/json" \
+        -H "PRIVATE-TOKEN: ${GITCODE_TOKEN}" \
+        -d "{\"tag_name\":\"${TAG_NAME}\",\"name\":\"${RELEASE_TITLE}\",\"body\":${body_json}}" \
+        "${API_BASE}/repos/${REPO_PATH}/releases/${rel_id}")
+    
+    if echo "$response" | grep -q "\"tag_name\":\"${TAG_NAME}\""; then
+        log_success "Release 描述已更新"
+        return 0
+    fi
+    
+    # 如果还是失败，尝试 PUT
+    log_debug "尝试 PUT 方法..."
+    
+    response=$(curl -s -X PUT \
+        -H "PRIVATE-TOKEN: ${GITCODE_TOKEN}" \
+        -F "tag_name=${TAG_NAME}" \
+        -F "name=${RELEASE_TITLE}" \
+        -F "body=${new_body}" \
+        "${API_BASE}/repos/${REPO_PATH}/releases/${rel_id}")
     
     if echo "$response" | grep -q "\"tag_name\":\"${TAG_NAME}\""; then
         log_success "Release 描述已更新"
     else
-        log_warning "描述更新可能失败"
-        log_debug "响应: ${response:0:200}"
+        log_warning "描述更新失败"
+        log_debug "响应: ${response:0:300}"
+        echo ""
+        echo "请手动更新 Release 描述:"
+        echo "  https://gitcode.com/${REPO_PATH}/releases/edit/${TAG_NAME}"
+        echo ""
+        echo "添加以下内容:"
+        echo ""
+        echo "${file_links}"
     fi
 }
 
@@ -364,7 +407,6 @@ upload_files() {
             uploaded=$((uploaded + 1))
             file_links="${file_links}- [📦 ${filename}](${download_url})
 "
-            log_debug "下载: $download_url"
         else
             failed=$((failed + 1))
         fi
@@ -387,11 +429,6 @@ verify_release() {
     
     if echo "$response" | grep -q "\"tag_name\":\"${TAG_NAME}\""; then
         log_success "验证成功"
-        
-        if command -v jq &>/dev/null; then
-            local assets=$(echo "$response" | jq '.assets | length')
-            log_info "源码包数量: $assets"
-        fi
     else
         log_error "验证失败"
         exit 1
