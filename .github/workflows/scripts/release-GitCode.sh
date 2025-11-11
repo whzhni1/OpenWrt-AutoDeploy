@@ -159,6 +159,16 @@ ensure_branch() {
     
     log_warning "分支不存在，创建中..."
     
+    # 检查是否是 shallow clone
+    if [ -f ".git/shallow" ]; then
+        log_info "检测到浅克隆，转换为完整仓库..."
+        git fetch --unshallow || {
+            log_warning "无法 unshallow，将创建新仓库"
+            rm -rf .git
+            git init
+        }
+    fi
+    
     [ ! -d ".git" ] && git init
     
     git config user.name "GitCode Bot"
@@ -193,7 +203,7 @@ EOF
         git commit -m "Initial commit"
     fi
     
-    # 设置远程仓库（使用 oauth2 方式）
+    # 设置远程仓库
     local git_url="https://oauth2:${GITCODE_TOKEN}@gitcode.com/${REPO_PATH}.git"
     
     if git remote get-url gitcode &>/dev/null; then
@@ -204,14 +214,15 @@ EOF
     
     log_info "推送到远程仓库..."
     
-    # 推送（隐藏 token）
-    if git push gitcode HEAD:refs/heads/${BRANCH} 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g"; then
-        log_success "分支创建成功"
-        sleep 3
-    else
+    # 推送并正确处理错误
+    push_output=$(git push gitcode HEAD:refs/heads/${BRANCH} 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g") || {
         log_error "分支推送失败"
+        echo "$push_output"
         exit 1
-    fi
+    }
+    
+    log_success "分支创建成功"
+    sleep 3
 }
 
 cleanup_old_tags() {
@@ -277,7 +288,7 @@ create_release() {
         exit 1
     fi
     
-    # 提取 ID（多种格式兼容）
+    # 提取 ID
     RELEASE_ID=$(echo "$response" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
     
     if [ -z "$RELEASE_ID" ]; then
