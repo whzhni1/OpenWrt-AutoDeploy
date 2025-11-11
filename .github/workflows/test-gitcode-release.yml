@@ -1,65 +1,31 @@
-name: 测试 GitCode Release 发布
+name: 测试 GitCode Release
 
 on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: '发布标签名'
-        required: true
         default: 'v1.0.0'
       repo_name:
-        description: '仓库名称'
-        required: false
         default: 'test-release'
 
-env:
-  USERNAME: whzhni
-  REPO_NAME: ${{ inputs.repo_name }}
-  TAG_NAME: ${{ inputs.tag_name }}
-
 jobs:
-  test-release:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出仓库
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: 生成测试文件
         run: |
-          mkdir -p release-files
-          
-          echo "# Test Release ${{ env.TAG_NAME }}" > release-files/README.md
-          echo "Version: ${{ env.TAG_NAME }}" > release-files/version.txt
-          echo '{"version": "${{ env.TAG_NAME }}"}' > release-files/config.json
-          
-          ls -lh release-files/
+          mkdir -p files
+          echo "# Test" > files/README.md
+          echo "v${{ inputs.tag_name }}" > files/version.txt
 
-      - name: 配置脚本
-        run: |
-          SCRIPT=".github/workflows/scripts/release-GitCode.sh"
-          cp "$SCRIPT" "${SCRIPT}.backup"
-          
-          sed -i "s/^REPO_NAME=.*/REPO_NAME=\"${{ env.REPO_NAME }}\"/" "$SCRIPT"
-          sed -i "s/^TAG_NAME=.*/TAG_NAME=\"${{ env.TAG_NAME }}\"/" "$SCRIPT"
-          sed -i "s/^RELEASE_TITLE=.*/RELEASE_TITLE=\"Release ${{ env.TAG_NAME }}\"/" "$SCRIPT"
-          sed -i 's|^UPLOAD_FILES=.*|UPLOAD_FILES="release-files/README.md release-files/version.txt release-files/config.json"|' "$SCRIPT"
-          sed -i 's|^RELEASE_BODY=.*|RELEASE_BODY="Test release for ${{ env.TAG_NAME }}"|' "$SCRIPT"
-          
-          chmod +x "$SCRIPT"
-
-      - name: 执行发布
+      - name: 发布
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          REPO_NAME: ${{ inputs.repo_name }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          UPLOAD_FILES: "files/README.md files/version.txt"
         run: |
-          if [ -z "$GITCODE_TOKEN" ]; then
-            echo "错误: GITCODE_TOKEN 未配置"
-            exit 1
-          fi
-          
+          chmod +x .github/workflows/scripts/release-GitCode.sh
           .github/workflows/scripts/release-GitCode.sh
-
-      - name: 清理
-        if: always()
-        run: |
-          [ -f ".github/workflows/scripts/release-GitCode.sh.backup" ] && \
-            mv .github/workflows/scripts/release-GitCode.sh.backup .github/workflows/scripts/release-GitCode.sh
