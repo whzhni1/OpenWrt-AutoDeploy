@@ -230,16 +230,17 @@ ${REPO_DESC}
 create_initial_commit_with_git() {
     log_debug "使用 Git 创建初始提交..."
     
-    # 创建临时目录
-    local temp_dir=$(mktemp -d)
+    # 🔧 使用独立的临时目录
+    local temp_dir="${RUNNER_TEMP:-/tmp}/gitcode-init-$$-${RANDOM}"
+    mkdir -p "$temp_dir"
+    
+    local current_dir=$(pwd)
     cd "$temp_dir"
     
-    # 初始化 Git
     git init -q
     git config user.name "GitCode Bot"
     git config user.email "bot@gitcode.com"
     
-    # 创建 README
     cat > README.md << EOF
 # ${REPO_NAME}
 
@@ -248,28 +249,22 @@ ${REPO_DESC}
 ## 📦 Release
 
 本仓库用于自动发布构建产物。
-
-## 🔗 链接
-
-- GitCode: https://gitcode.com/${REPO_PATH}
 EOF
     
-    # 提交
     git add README.md
     git commit -m "Initial commit" -q
     
-    # 推送
     local git_url="https://oauth2:${GITCODE_TOKEN}@gitcode.com/${REPO_PATH}.git"
     git remote add origin "$git_url"
     
     if git push -u origin main 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g"; then
         log_success "初始提交成功"
-        cd - > /dev/null
+        cd "$current_dir"
         rm -rf "$temp_dir"
         return 0
     else
         log_error "初始提交失败"
-        cd - > /dev/null
+        cd "$current_dir"
         rm -rf "$temp_dir"
         return 1
     fi
@@ -315,26 +310,52 @@ cleanup_old_tags() {
     echo ""
     log_info "步骤 3/5: 清理旧标签"
     
-    local response=$(api_get "/repos/${REPO_PATH}/tags")
+    if ! command -v git &> /dev/null; then
+        log_warning "未找到 git 命令，跳过标签清理"
+        return 0
+    fi
     
-    if ! echo "$response" | grep -q '\['; then
+    local deleted_count=0
+    
+    # 🔧 使用独立的临时目录
+    local temp_git_dir="${RUNNER_TEMP:-/tmp}/gitcode-cleanup-$$-${RANDOM}"
+    mkdir -p "$temp_git_dir"
+    local current_dir=$(pwd)
+    
+    cd "$temp_git_dir"
+    git init -q
+    git config user.name "GitCode Bot"
+    git config user.email "bot@gitcode.com"
+    
+    local git_url="https://oauth2:${GITCODE_TOKEN}@gitcode.com/${REPO_PATH}.git"
+    git remote add origin "$git_url"
+    
+    # 获取所有标签
+    log_debug "获取标签列表..."
+    local tags_response=$(api_get "/repos/${REPO_PATH}/tags")
+    
+    if ! echo "$tags_response" | grep -q '\['; then
         log_info "没有旧标签"
+        cd "$current_dir"
+        rm -rf "$temp_git_dir"
         return 0
     fi
     
     local tags=""
     if command -v jq &>/dev/null; then
-        tags=$(echo "$response" | jq -r '.[].name' 2>/dev/null)
+        tags=$(echo "$tags_response" | jq -r '.[].name' 2>/dev/null)
     else
-        tags=$(echo "$response" | grep -o '{"name":"[^"]*"' | cut -d'"' -f4)
+        tags=$(echo "$tags_response" | grep -o '{"name":"[^"]*"' | cut -d'"' -f4)
     fi
     
     if [ -z "$tags" ]; then
         log_info "没有旧标签"
+        cd "$current_dir"
+        rm -rf "$temp_git_dir"
         return 0
     fi
     
-    local deleted=0
+    # 遍历删除
     while IFS= read -r tag; do
         [ -z "$tag" ] || [ "$tag" = "$TAG_NAME" ] && continue
         
@@ -347,15 +368,18 @@ cleanup_old_tags() {
         local http_code=$(api_delete "/repos/${REPO_PATH}/tags/${tag}")
         
         if [ "$http_code" -eq 204 ] || [ "$http_code" -eq 200 ]; then
-            deleted=$((deleted + 1))
+            deleted_count=$((deleted_count + 1))
         fi
         
         sleep 1
     done <<< "$tags"
     
-    [ $deleted -gt 0 ] && log_info "已删除 $deleted 个旧标签" || log_info "没有需要删除的标签"
+    # 🔧 返回原目录并清理
+    cd "$current_dir"
+    rm -rf "$temp_git_dir"
+    
+    [ $deleted_count -gt 0 ] && log_info "已删除 $deleted_count 个旧标签" || log_info "没有需要删除的标签"
 }
-
 create_release() {
     echo ""
     log_info "步骤 4/5: 创建 Release"
