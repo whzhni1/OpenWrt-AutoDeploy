@@ -217,7 +217,7 @@ ${REPO_DESC}
         -d @-)
     
     # 检查是否成功
-    if echo "$response" | jq -e '.sha' > /dev/null 2>&1; then
+    if echo "$response" | jq -e '.commit.sha' > /dev/null 2>&1; then
         log_success "初始文件创建成功"
         return 0
     else
