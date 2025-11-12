@@ -42,7 +42,7 @@ jobs:
         
         UPDATES='[]'
         
-        # 🔧 修复：使用进程替换而不是管道
+        # 使用进程替换
         while read -r project; do
           github_owner=$(echo "$project" | jq -r '.github_owner')
           github_repo=$(echo "$project" | jq -r '.github_repo')
@@ -135,7 +135,7 @@ jobs:
           echo "$UPDATES" | jq -r '.[] | "  - \(.local_name) (\(.version))"'
         fi
 
-  # 并行编译（保留所有架构）
+  # 并行编译
 
  build:
     name: ${{ matrix.project.local_name }}-${{ matrix.arch }}-${{ matrix.sdk }}
@@ -233,27 +233,20 @@ jobs:
         chmod +x .github/workflows/scripts/release-gitee.sh
         chmod +x .github/workflows/scripts/version-manager.sh
 
-    # 🔧 修复：下载到临时目录，不在仓库目录
+    # 下载到临时目录
     - name: 下载所有编译产物
       uses: actions/download-artifact@v4
       with:
         pattern: ${{ matrix.project.local_name }}-*
-        path: ${{ runner.temp }}/artifacts  # ✅ 使用 Runner 临时目录
+        path: ${{ runner.temp }}/artifacts
         merge-multiple: false
 
-    # 🔧 修复：在临时目录整理文件
     - name: 整理文件到临时目录
       run: |
-        
         echo "📦 整理编译文件: ${{ matrix.project.local_name }}"
-        
-        
-        # ✅ 使用 Runner 临时目录
         ARTIFACTS_DIR="${{ runner.temp }}/artifacts"
         RELEASE_DIR="${{ runner.temp }}/release-files"
-        
         mkdir -p "$RELEASE_DIR"
-        
         echo "工件目录: $ARTIFACTS_DIR"
         echo "发布目录: $RELEASE_DIR"
         echo ""
@@ -265,7 +258,7 @@ jobs:
           if [ ! -d "$artifact_dir" ]; then
             continue
           fi
-          
+
           artifact_name=$(basename "$artifact_dir")
           arch=$(echo "$artifact_name" | sed 's/^${{ matrix.project.local_name }}-//' | sed 's/-openwrt-24.10$//' | sed 's/-SNAPSHOT$//')
           
@@ -323,7 +316,6 @@ jobs:
         
         FINAL_IPK=$(find "$RELEASE_DIR" -type f -name "*.ipk" 2>/dev/null | wc -l)
         FINAL_APK=$(find "$RELEASE_DIR" -type f -name "*.apk" 2>/dev/null | wc -l)
-        
         
         echo "📊 文件统计"
         
@@ -421,10 +413,7 @@ jobs:
 
     - name: 更新版本记录到 version.txt
       run: |
-    
         echo "📝 更新版本记录"
-    
-    
         # 确保工作目录干净
         cd "$GITHUB_WORKSPACE"
     
