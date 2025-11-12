@@ -597,8 +597,6 @@ jobs:
         
         ## 🔨 构建详情
         
-        ### 架构支持
-        - **架构数量**: 33 个
         - **SDK 版本**: OpenWrt 24.10 + SNAPSHOT
         - **文件格式**: IPK（OpenWrt 24.10）+ APK（SNAPSHOT）
         
