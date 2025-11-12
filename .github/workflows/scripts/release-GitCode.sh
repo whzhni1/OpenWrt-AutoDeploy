@@ -217,7 +217,7 @@ ${REPO_DESC}
         -d @-)
     
     # 检查是否成功
-    if jq -e '.content.sha' || jq -e '.commit.sha' || jq -e '.sha'; then
+    if echo "$response" | jq -e '.sha' > /dev/null 2>&1; then
         log_success "初始文件创建成功"
         return 0
     else
@@ -230,18 +230,24 @@ ${REPO_DESC}
 create_initial_commit_with_git() {
     log_debug "使用 Git 创建初始提交..."
     
-    # 使用独立的临时目录
     local temp_dir="${RUNNER_TEMP:-/tmp}/gitcode-init-$$-${RANDOM}"
     mkdir -p "$temp_dir"
     
     local current_dir=$(pwd)
     cd "$temp_dir"
     
-    git init -q
-    git config user.name "GitCode Bot"
-    git config user.email "bot@gitcode.com"
+    local git_url="https://oauth2:${GITCODE_TOKEN}@gitcode.com/${REPO_PATH}.git"
     
-    cat > README.md << EOF
+    # 尝试克隆
+    if git clone "$git_url" . 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g"; then
+        if [ -f "README.md" ]; then
+            log_success "README.md 已存在"
+            cd "$current_dir"
+            rm -rf "$temp_dir"
+            return 0
+        fi
+        
+        cat > README.md << EOF
 # ${REPO_NAME}
 
 ${REPO_DESC}
@@ -250,24 +256,55 @@ ${REPO_DESC}
 
 本仓库用于自动发布构建产物。
 EOF
-    
-    git add README.md
-    git commit -m "Initial commit" -q
-    
-    local git_url="https://oauth2:${GITCODE_TOKEN}@gitcode.com/${REPO_PATH}.git"
-    git remote add origin "$git_url"
-    
-    if git push 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g"; then
-        log_success "初始提交成功"
-        cd "$current_dir"
-        rm -rf "$temp_dir"
-        return 0
+        
+        git add README.md
+        git commit -m "Add README.md" -q
+        
+        # push，不指定分支（使用当前分支）
+        if git push 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g"; then
+            log_success "README.md 创建成功"
+            cd "$current_dir"
+            rm -rf "$temp_dir"
+            return 0
+        fi
     else
-        log_error "初始提交失败"
-        cd "$current_dir"
-        rm -rf "$temp_dir"
-        return 1
+        # 仓库为空，初始化
+        git init -q
+        git config user.name "GitCode Bot"
+        git config user.email "bot@gitcode.com"
+        
+        cat > README.md << EOF
+# ${REPO_NAME}
+
+${REPO_DESC}
+
+## 📦 Release
+
+本仓库用于自动发布构建产物。
+EOF
+        
+        git add README.md
+        git commit -m "Initial commit" -q
+        git remote add origin "$git_url"
+        
+        # 依次尝试 master 和 main
+        if git push -u origin HEAD:master 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g"; then
+            log_success "初始提交成功 (master)"
+            cd "$current_dir"
+            rm -rf "$temp_dir"
+            return 0
+        elif git push -u origin HEAD:main 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g"; then
+            log_success "初始提交成功 (main)"
+            cd "$current_dir"
+            rm -rf "$temp_dir"
+            return 0
+        fi
     fi
+    
+    log_error "初始提交失败"
+    cd "$current_dir"
+    rm -rf "$temp_dir"
+    return 1
 }
 
 ensure_branch() {
