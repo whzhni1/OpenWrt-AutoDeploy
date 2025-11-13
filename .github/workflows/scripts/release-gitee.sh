@@ -186,7 +186,7 @@ check_token() {
 
 ensure_repository() {
     echo ""
-    log_info "步骤 1/5: 检查仓库"
+    log_info "步骤 1/4: 检查仓库"
 
     local response=$(api_get "/repos/${REPO_PATH}")
 
@@ -209,17 +209,6 @@ ensure_repository() {
 
     if echo "$response" | jq -e '.id' > /dev/null 2>&1; then
         log_success "仓库创建成功 (默认私有)"
-
-        # 修改为公开仓库
-        local update_response=$(curl -s -X PATCH \
-            "https://gitee.com/api/v5/repos/${REPO_PATH}?access_token=${GITEE_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"private\":false}")
-
-        if echo "$update_response" | jq -e '.private' | grep -q "false"; then
-            log_success "仓库已修改为公开"
-        fi
-
         sleep 3
 
         # 初始化仓库
@@ -255,11 +244,24 @@ EOF
             log_success "仓库初始化完成 (分支: ${BRANCH})"
         else
             log_error "初始化失败"
+            cd "$current_dir"
+            rm -rf "$temp_dir"
             exit 1
         fi
 
         cd "$current_dir"
         rm -rf "$temp_dir"
+
+        # 设置为公开仓库
+        local update_response=$(curl -s -X PATCH \
+            "https://gitee.com/api/v5/repos/${REPO_PATH}?access_token=${GITEE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"private\":false}")
+
+        if echo "$update_response" | jq -e '.private' | grep -q "false"; then
+            log_success "仓库已修改为公开"
+        fi
+
     else
         log_error "仓库创建失败"
         log_debug "响应: $response"
@@ -267,25 +269,9 @@ EOF
     fi
 }
 
-
-ensure_branch() {
-    echo ""
-    log_info "步骤 2/5: 检查分支"
-    
-    local response=$(api_get "/repos/${REPO_PATH}/branches/${BRANCH}")
-    
-    if echo "$response" | jq -e '.name' > /dev/null 2>&1; then
-        log_success "分支 ${BRANCH} 已存在"
-        return 0
-    fi
-    
-    log_error "分支 ${BRANCH} 不存在"
-    return 0
-}
-
 cleanup_old_tags() {
     echo ""
-    log_info "步骤 3/5: 清理旧标签和 Release"
+    log_info "步骤 2/4: 清理旧标签和 Release"
     
     if ! command -v git &> /dev/null; then
         log_warning "未找到 git 命令，跳过标签清理"
@@ -378,7 +364,7 @@ cleanup_old_tags() {
 
 create_release() {
     echo ""
-    log_info "步骤 4/5: 创建 Release"
+    log_info "步骤 3/4: 创建 Release"
     log_info "标签: ${TAG_NAME}"
     log_info "标题: ${RELEASE_TITLE}"
     
@@ -439,7 +425,7 @@ create_release() {
 
 upload_files() {
     echo ""
-    log_info "步骤 5/5: 上传文件到 Release"
+    log_info "步骤 4/4: 上传文件到 Release"
     
     if [ -z "$UPLOAD_FILES" ]; then
         log_info "没有文件需要上传"
@@ -512,7 +498,6 @@ main() {
 
     check_token
     ensure_repository
-    ensure_branch
     cleanup_old_tags
     create_release
     upload_files
