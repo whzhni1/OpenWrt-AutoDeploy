@@ -481,10 +481,3 @@ jobs:
       
            echo "✅ 版本记录已更新"
         fi
-        
- report:
-  runs-on: ubuntu-latest
-  needs: [check-updates, build, release]
-  if: always()
-  
-  
