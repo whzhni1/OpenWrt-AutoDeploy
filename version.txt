@@ -1,2 +1,3 @@
 
+luci-app-OpenClash/v0.47.028
 openlist2/v4.1.7
