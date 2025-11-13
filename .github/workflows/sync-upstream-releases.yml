@@ -1,7 +1,7 @@
-name: 同步上游发布版本
+name: 同步上游发布插件
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 只保留手动触发
 
 jobs:
   sync:
@@ -42,11 +42,12 @@ jobs:
             local_name: "luci-app-passwall2"
             filter_exclude: "luci-19.07* *.zip"
 
-            
+
+          
           # 配置说明：
           # - github_owner: "作者名"                    # 必填
           # - github_repo: "项目名"                      # 必填  
-          # - local_name: "本创建仓库名"                # 可选，不设置则使用 github_repo
+          # - local_name: "目标仓库名"                # 可选，不设置则使用 github_repo
           # - filter_exclude: "*.zip *.rar"            # 可选，排除匹配的文件（空格分隔多个模式）
           # - filter_include: "*.ipk *zh-cn*"          # 可选，只保留匹配的文件
           # - filter_include: "luci-app-*:1"           # :1 表示该模式只保留第1个匹配的文件
@@ -208,4 +209,316 @@ jobs:
           echo "📊 下载完成: $file_count 个文件"
           
           if [ "$file_count" -eq 0 ]; then
-           
+            echo "❌ 下载失败"
+            echo "downloaded=false" >> $GITHUB_ENV
+            exit 1
+          fi
+          
+          echo "downloaded=true" >> $GITHUB_ENV
+          echo "DOWNLOAD_DIR=$DOWNLOAD_DIR" >> $GITHUB_ENV
+          
+      - name: 应用过滤规则
+        if: env.downloaded == 'true' && (matrix.filter_exclude != '' || matrix.filter_include != '')
+        run: |
+          latest_version="${{ steps.get-version.outputs.version }}"
+          filter_exclude="${{ matrix.filter_exclude }}"
+          filter_include="${{ matrix.filter_include }}"
+          
+          DOWNLOAD_DIR="${{ env.DOWNLOAD_DIR }}"
+          TEMP_DIR="${{ runner.temp }}/filtered"
+          
+          VERSION_NO_V=${latest_version#v}
+          
+          echo "🧹 应用过滤规则"
+          echo "匹配版本: $VERSION_NO_V"
+          [ -n "$filter_exclude" ] && echo "排除: $filter_exclude"
+          [ -n "$filter_include" ] && echo "保留: $filter_include"
+          
+          rm -rf "$TEMP_DIR"
+          mkdir -p "$TEMP_DIR"
+          
+          # 白名单模式
+          if [ -n "$filter_include" ]; then
+            declare -A pattern_count
+            declare -A pattern_limit
+            
+            for pattern_rule in $filter_include; do
+              if [[ "$pattern_rule" == *:* ]]; then
+                pattern="${pattern_rule%:*}"
+                limit="${pattern_rule#*:}"
+                pattern="${pattern//\{VERSION\}/$VERSION_NO_V}"
+                pattern_limit["$pattern"]=$limit
+                pattern_count["$pattern"]=0
+              else
+                pattern="$pattern_rule"
+                pattern="${pattern//\{VERSION\}/$VERSION_NO_V}"
+                pattern_limit["$pattern"]=999999
+                pattern_count["$pattern"]=0
+              fi
+            done
+            
+            for file in "$DOWNLOAD_DIR"/*; do
+              [ -f "$file" ] || continue
+              filename=$(basename "$file")
+              
+              for pattern in "${!pattern_limit[@]}"; do
+                if [[ "$filename" == $pattern ]]; then
+                  current_count=${pattern_count["$pattern"]}
+                  limit=${pattern_limit["$pattern"]}
+                  
+                  if [ $current_count -lt $limit ]; then
+                    cp "$file" "$TEMP_DIR/"
+                    pattern_count["$pattern"]=$((current_count + 1))
+                    break
+                  fi
+                fi
+              done
+            done
+            
+          # 黑名单模式
+          elif [ -n "$filter_exclude" ]; then
+            for file in "$DOWNLOAD_DIR"/*; do
+              [ -f "$file" ] || continue
+              filename=$(basename "$file")
+              
+              excluded=false
+              for pattern in $filter_exclude; do
+                if [[ "$filename" == $pattern ]]; then
+                  excluded=true
+                  break
+                fi
+              done
+              
+              if [ "$excluded" = false ]; then
+                cp "$file" "$TEMP_DIR/"
+              fi
+            done
+          fi
+          
+          file_count=$(ls -1 "$TEMP_DIR" 2>/dev/null | wc -l)
+          echo "📊 过滤后: $file_count 个文件"
+          
+          if [ "$file_count" -eq 0 ]; then
+            echo "⚠️  过滤后无文件"
+            echo "downloaded=false" >> $GITHUB_ENV
+          else
+            rm -rf "$DOWNLOAD_DIR"
+            mv "$TEMP_DIR" "$DOWNLOAD_DIR"
+            echo "✅ 过滤完成"
+          fi
+
+      - name: 🚀 并行发布到 GitCode 和 Gitee
+        if: env.downloaded == 'true'
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITCODE_USERNAME: ${{ secrets.GITCODE_USERNAME || 'whzhni' }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME || 'whzhni' }}
+        run: |
+          local_name="${{ steps.set-names.outputs.local_name }}"
+          version="${{ steps.get-version.outputs.version }}"
+          github_owner="${{ matrix.github_owner }}"
+          github_repo="${{ matrix.github_repo }}"
+          
+          BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')
+          
+          RELEASE_BODY="## 📦 ${local_name} ${version}
+
+          ### 📌 项目信息
+          - 项目名称: ${github_repo}
+          - 项目版本: ${version}
+          - 上游仓库: https://github.com/${github_owner}/${github_repo}
+          - 上游地址: https://github.com/${github_owner}/${github_repo}/releases/tag/${version#v}
+
+          ### 🔨 同步信息
+          - 同步时间: ${BUILD_TIME} (北京时间)
+          - 工作流运行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          UPLOAD_FILES=$(find "${{ env.DOWNLOAD_DIR }}" -type f | tr '\n' ' ')
+          
+          echo "准备并行发布"
+          echo "仓库名: $local_name"
+          echo "版本: $version"
+          echo "文件数: $(echo $UPLOAD_FILES | wc -w)"
+          
+          # 并行发布
+          (
+            GITCODE_TOKEN="$GITCODE_TOKEN" \
+            USERNAME="$GITCODE_USERNAME" \
+            REPO_NAME="$local_name" \
+            TAG_NAME="$version" \
+            RELEASE_TITLE="$local_name $version" \
+            RELEASE_BODY="$RELEASE_BODY" \
+            UPLOAD_FILES="$UPLOAD_FILES" \
+            RUNNER_TEMP="${{ runner.temp }}" \
+            .github/workflows/scripts/release-GitCode.sh
+          ) &
+          GITCODE_PID=$!
+          
+          (
+            GITEE_TOKEN="$GITEE_TOKEN" \
+            USERNAME="$GITEE_USERNAME" \
+            REPO_NAME="$local_name" \
+            TAG_NAME="$version" \
+            RELEASE_TITLE="$local_name $version" \
+            RELEASE_BODY="$RELEASE_BODY" \
+            UPLOAD_FILES="$UPLOAD_FILES" \
+            RUNNER_TEMP="${{ runner.temp }}" \
+            .github/workflows/scripts/release-gitee.sh
+          ) &
+          GITEE_PID=$!
+          
+          wait $GITCODE_PID
+          GITCODE_STATUS=$?
+          
+          wait $GITEE_PID
+          GITEE_STATUS=$?
+          
+          echo ""
+          echo "📊 发布结果"
+          echo "GitCode: $([ $GITCODE_STATUS -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
+          echo "Gitee:   $([ $GITEE_STATUS -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
+          
+          if [ $GITCODE_STATUS -eq 0 ] || [ $GITEE_STATUS -eq 0 ]; then
+            echo "release_success=true" >> $GITHUB_ENV
+          else
+            echo "::error::两个平台都发布失败"
+            exit 1
+          fi
+
+      - name: 更新版本记录
+        if: env.release_success == 'true'
+        run: |
+          local_name="${{ steps.set-names.outputs.local_name }}"
+          version="${{ steps.get-version.outputs.version }}"
+          
+          .github/workflows/scripts/version-manager.sh write "$local_name" "$version"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add version.txt
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "📝 更新版本: $local_name → $version"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push origin ${{ github.ref_name }}
+            echo "✅ 版本记录已更新"
+          else
+            echo "ℹ️  版本记录无变化"
+          fi
+          
+      - name: 生成状态信息
+        if: always()
+        run: |
+          github_repo="${{ matrix.github_repo }}"
+          local_name="${{ steps.set-names.outputs.local_name }}"
+          version="${{ steps.get-version.outputs.version }}"
+          local_version="${{ steps.check-update.outputs.local_version }}"
+          
+          mkdir -p /tmp/status
+          
+          if [ "${{ steps.get-version.outputs.has_release }}" != "true" ]; then
+            status="未找到 Release"
+            upstream_ver="-"
+            local_ver="-"
+          elif [ "${{ steps.check-update.outputs.needs_update }}" != "true" ]; then
+            status="✅ 无需更新"
+            upstream_ver="${version}"
+            local_ver="${version}"
+          elif [ "${{ env.release_success }}" == "true" ]; then
+            status="✅ 已发布"
+            upstream_ver="${version}"
+            local_ver="${local_version}"
+          else
+            status="❌ 失败"
+            upstream_ver="${version:-"-"}"
+            local_ver="${local_version:-"-"}"
+          fi
+          
+          echo "${github_repo}" > "/tmp/status/${github_repo}.txt"
+          echo "${local_name}" >> "/tmp/status/${github_repo}.txt"
+          echo "${upstream_ver}" >> "/tmp/status/${github_repo}.txt"
+          echo "${local_ver}" >> "/tmp/status/${github_repo}.txt"
+          echo "${status}" >> "/tmp/status/${github_repo}.txt"
+          
+      - name: 上传状态
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: status-${{ matrix.github_repo }}
+          path: /tmp/status/${{ matrix.github_repo }}.txt
+          retention-days: 1
+          
+  summary:
+    name: 生成同步报告
+    needs: sync
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: 下载状态信息
+        uses: actions/download-artifact@v4
+        with:
+          pattern: status-*
+          path: /tmp/artifacts
+          merge-multiple: false
+          
+      - name: 生成报告
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          # 📋 上游同步报告
+          
+          **执行时间:** $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S') (北京时间)
+          
+          ## 📊 同步详情
+          
+          | 上游项目 | 仓库名称 | 上游版本 | 本地版本 | 状态 |
+          |----------|----------|----------|----------|------|
+          EOF
+          
+          total=0
+          updated=0
+          skipped=0
+          failed=0
+          
+          for artifact_dir in /tmp/artifacts/status-*/; do
+            if [ -d "$artifact_dir" ]; then
+              for status_file in "$artifact_dir"*.txt; do
+                if [ -f "$status_file" ]; then
+                  github_repo=$(sed -n '1p' "$status_file" | tr -d '\r')
+                  local_name=$(sed -n '2p' "$status_file" | tr -d '\r')
+                  upstream_ver=$(sed -n '3p' "$status_file" | tr -d '\r')
+                  local_ver=$(sed -n '4p' "$status_file" | tr -d '\r')
+                  status=$(sed -n '5p' "$status_file" | tr -d '\r')
+                  
+                  total=$((total + 1))
+                  case "$status" in
+                    *"已发布"*) updated=$((updated + 1)) ;;
+                    *"无需更新"*) skipped=$((skipped + 1)) ;;
+                    *"失败"*) failed=$((failed + 1)) ;;
+                  esac
+                  
+                  echo "| $github_repo | $local_name | $upstream_ver | $local_ver | $status |" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+            fi
+          done
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          
+          ---
+          
+          **统计:** 总计 $total 个项目 | 已发布 $updated 个 | 无需更新 $skipped 个 | 失败 $failed 个
+          
+          **发布平台:**
+          - 🌐 GitCode
+          - 🌐 Gitee
+          EOF
+          
+      - name: 清理临时文件
+        if: always()
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: status-*
+          failOnError: false
