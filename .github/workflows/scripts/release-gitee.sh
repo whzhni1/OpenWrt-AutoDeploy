@@ -204,7 +204,7 @@ ensure_repository() {
     response=$(api_post "/user/repos" "{
         \"name\":\"${REPO_NAME}\",
         \"description\":\"${REPO_DESC}\",
-        \"private\":${private_val},
+        \"private\":false,
         \"has_issues\":true,
         \"has_wiki\":true,
         \"auto_init\":false
