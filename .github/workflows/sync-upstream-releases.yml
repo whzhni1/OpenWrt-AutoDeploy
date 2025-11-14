@@ -262,14 +262,6 @@ jobs:
               [ -f "$file" ] || continue
               filename=$(basename "$file")
 
-              if [ "$filter_by_version" = "true" ]; then
-              # 检查文件名是否包含当前版本号
-              if ! echo "$filename" | grep -q "$VERSION_NO_V"; then
-                  echo "  ⏭️  版本不匹配: $filename (不含 $VERSION_NO_V)"
-                  continue
-                fi
-              fi
-
               for pattern in "${!pattern_limit[@]}"; do
                 if [[ "$filename" == $pattern ]]; then
                   current_count=${pattern_count["$pattern"]}
@@ -290,13 +282,6 @@ jobs:
               [ -f "$file" ] || continue
               filename=$(basename "$file")
 
-              if [ "$filter_by_version" = "true" ]; then
-              if ! echo "$filename" | grep -q "$VERSION_NO_V"; then
-                  echo "  ⏭️  版本不匹配: $filename"
-                  continue
-                fi
-              fi
-        
               excluded=false
               for pattern in $filter_exclude; do
                 if [[ "$filename" == $pattern ]]; then
@@ -314,12 +299,6 @@ jobs:
               [ -f "$file" ] || continue
               filename=$(basename "$file")
         
-              if echo "$filename" | grep -q "$VERSION_NO_V"; then
-                cp "$file" "$TEMP_DIR/"
-                echo "  ✅ $filename"
-              else
-                echo "  ⏭️  版本不匹配: $filename"
-              fi
             done
           fi
           
