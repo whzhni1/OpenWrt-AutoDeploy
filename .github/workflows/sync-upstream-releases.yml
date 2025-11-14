@@ -24,8 +24,8 @@ jobs:
           - github_owner: "gdy666"
             github_repo: "luci-app-lucky"
             local_name: "lucky"
-            filter_include: "luci-app-*:1 luci-i18n-*:1 *wanji*"
-            filter_by_version: true
+            filter_include: "luci-app-*:1 luci-i18n-*:1 *{VERSION}*wanji*"
+            #filter_by_version: true
 
           # luci-theme-aurora
           - github_owner: "eamonxg"
