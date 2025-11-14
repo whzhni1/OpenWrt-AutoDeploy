@@ -5,6 +5,7 @@ set -e
 #  环境变量配置 
 GITEE_TOKEN="${GITEE_TOKEN:-}"
 USERNAME="${USERNAME:-}"
+REPO_STATUS="1"
 REPO_NAME="${REPO_NAME:-}"
 REPO_DESC="${REPO_DESC:-Gitee Release Repository}"
 REPO_PRIVATE="${REPO_PRIVATE:-false}"
@@ -192,6 +193,7 @@ ensure_repository() {
 
     if echo "$response" | jq -e '.id' > /dev/null 2>&1; then
         log_success "仓库已存在"
+        REPO_STATUS="0"
         return 0
     fi
 
@@ -261,74 +263,63 @@ EOF
 
 cleanup_old_tags() {
     echo ""
-    log_info "步骤 2/4: 清理旧标签和 Release"
-    
+    log_info "步骤 2/4: 清理旧标签"
+
     if ! command -v git &> /dev/null; then
         log_warning "未找到 git 命令，跳过标签清理"
         return 0
     fi
-    
+
     local deleted_count=0
-    
+
     # 使用独立的临时目录
     local temp_git_dir="${RUNNER_TEMP:-/tmp}/gitee-cleanup-$$-${RANDOM}"
     mkdir -p "$temp_git_dir"
     local current_dir=$(pwd)
-    
+
     cd "$temp_git_dir"
     git init -q
     git config user.name "Gitee Bot"
     git config user.email "bot@gitee.com"
-    
+
     local git_url="https://oauth2:${GITEE_TOKEN}@gitee.com/${REPO_PATH}.git"
     git remote add origin "$git_url"
-    
+
     # 获取所有标签
     log_debug "获取标签列表..."
     local tags_response=$(api_get "/repos/${REPO_PATH}/tags")
-    
+
     if ! echo "$tags_response" | jq -e '.[0]' > /dev/null 2>&1; then
         log_info "没有旧标签"
         cd "$current_dir"
         rm -rf "$temp_git_dir"
         return 0
     fi
-    
+
     local tags=$(echo "$tags_response" | jq -r '.[].name' 2>/dev/null)
-    
+
     if [ -z "$tags" ]; then
         log_info "没有旧标签"
         cd "$current_dir"
         rm -rf "$temp_git_dir"
         return 0
     fi
-    
+
     # 遍历删除
     while IFS= read -r tag; do
         [ -z "$tag" ] || [ "$tag" = "$TAG_NAME" ] && continue
-        
+
         if ! echo "$tag" | grep -qE '^(v[0-9]|[0-9])'; then
             continue
         fi
-        
+
         echo ""
         log_warning "清理: $tag"
-        
-        # 1. 删除 Release
-        local release=$(api_get "/repos/${REPO_PATH}/releases/tags/${tag}")
-        local release_id=$(echo "$release" | jq -r '.id // empty')
-        
-        if [ -n "$release_id" ] && [ "$release_id" != "null" ]; then
-            log_debug "  删除 Release (ID: $release_id)..."
-            api_delete "/repos/${REPO_PATH}/releases/${release_id}" >/dev/null 2>&1
-            sleep 1
-        fi
-        
-        # 2. 删除 Git 标签
+
+        # 删除 Git 标签（Release 会随标签一起消失）
         log_debug "  删除 Git 标签..."
-        
         local output=$(git push origin ":refs/tags/${tag}" 2>&1 | sed "s/${GITEE_TOKEN}/***TOKEN***/g")
-        
+
         if [ $? -eq 0 ]; then
             log_success "  ✓ 已删除"
             deleted_count=$((deleted_count + 1))
@@ -340,14 +331,14 @@ cleanup_old_tags() {
                 log_debug "  $(echo "$output" | head -1)"
             fi
         fi
-        
+
         sleep 1
     done <<< "$tags"
-    
+
     # 返回原目录并清理
     cd "$current_dir"
     rm -rf "$temp_git_dir"
-    
+
     echo ""
     [ $deleted_count -gt 0 ] && log_success "已清理 $deleted_count 个旧版本" || log_info "没有需要清理的版本"
 }
@@ -512,8 +503,10 @@ main() {
     create_release
     upload_files
     verify_release
-    set_public_repo
-    
+    if [ "$REPO_STATUS" != "0" ]; then
+      set_public_repo
+    fi
+
     log_success "🎉 发布完成"
     echo "Release 地址:"
     echo "  https://gitee.com/${REPO_PATH}/releases/tag/${TAG_NAME}"
