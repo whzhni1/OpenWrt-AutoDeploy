@@ -127,7 +127,7 @@ check_token() {
 
 ensure_repository() {
     echo ""
-    log_info "步骤 1/5: 检查仓库"
+    log_info "步骤 1/4: 检查仓库"
     
     local response=$(api_get "/repos/${REPO_PATH}")
     
@@ -307,45 +307,9 @@ EOF
     return 1
 }
 
-ensure_branch() {
-    echo ""
-    log_info "步骤 2/5: 检查分支"
-    
-    local response=$(api_get "/repos/${REPO_PATH}/branches/${BRANCH}")
-    
-    if echo "$response" | grep -q '"name"'; then
-        log_success "分支已存在"
-        return 0
-    fi
-    
-    log_warning "分支不存在，创建中..."
-    
-    [ -f ".git/shallow" ] && { git fetch --unshallow || { rm -rf .git; git init; }; }
-    [ ! -d ".git" ] && git init
-    
-    git config user.name "GitCode Bot"
-    git config user.email "bot@gitcode.com"
-    
-    [ ! -f "README.md" ] && echo -e "# ${REPO_NAME}\n\n${REPO_DESC}" > README.md
-    
-    git add -A
-    git diff --cached --quiet && git commit --allow-empty -m "Initial commit" || git commit -m "Initial commit"
-    
-    local git_url="https://oauth2:${GITCODE_TOKEN}@gitcode.com/${REPO_PATH}.git"
-    git remote get-url gitcode &>/dev/null && git remote set-url gitcode "$git_url" || git remote add gitcode "$git_url"
-    
-    git push gitcode HEAD:refs/heads/${BRANCH} 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g" || {
-        log_error "推送失败"
-        exit 1
-    }
-    
-    log_success "分支创建成功"
-    sleep 3
-}
-
 cleanup_old_tags() {
     echo ""
-    log_info "步骤 3/5: 清理旧标签"
+    log_info "步骤 2/4: 清理旧标签"
     
     if ! command -v git &> /dev/null; then
         log_warning "未找到 git 命令，跳过标签清理"
@@ -419,7 +383,7 @@ cleanup_old_tags() {
 }
 create_release() {
     echo ""
-    log_info "步骤 4/5: 创建 Release"
+    log_info "步骤 3/4: 创建 Release"
     log_info "标签: ${TAG_NAME}"
     log_info "标题: ${RELEASE_TITLE}"
     
@@ -447,7 +411,7 @@ create_release() {
 
 upload_files() {
     echo ""
-    log_info "步骤 5/5: 上传文件到 Release"
+    log_info "步骤 4/4: 上传文件到 Release"
     
     if [ -z "$UPLOAD_FILES" ]; then
         log_info "没有文件需要上传"
@@ -516,7 +480,6 @@ main() {
     
     check_token
     ensure_repository
-    ensure_branch
     cleanup_old_tags
     create_release
     upload_files
