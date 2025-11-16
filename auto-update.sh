@@ -1,6 +1,6 @@
 #!/bin/sh
 
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 LOG_FILE="/tmp/auto-update.log"
 CONFIG_BACKUP_DIR="/tmp/config_Backup"
 DEVICE_MODEL="$(cat /tmp/sysinfo/model 2>/dev/null || echo '未知设备')"
@@ -102,6 +102,15 @@ normalize_version() {
     echo "$1" | sed 's/^[vV]//' | sed 's/[-_].*//'
 }
 
+version_greater() {
+    local v1=$(normalize_version "$1")
+    local v2=$(normalize_version "$2")
+    
+    [ "$v1" = "$v2" ] && return 1
+    
+    test "$(printf '%s\n%s\n' "$v1" "$v2" | sort -V | tail -1)" = "$v1"
+}
+
 # 版本比较
 version_greater() {
     local v1=$(normalize_version "$1")
@@ -135,12 +144,14 @@ extract_filenames() {
             return 1
             ;;
     esac
+    
     [ -z "$ASSET_FILENAMES" ] && {
-        log "  [调试] 未找到任何 ${PKG_EXT} 文件"
+        log "未找到任何 ${PKG_EXT} 文件"
         return 1
     }
+    
     local count=$(echo "$ASSET_FILENAMES" | wc -l)
-    log "  [调试] 成功提取 $count 个文件名"
+    log "成功提取 $count 个文件"
     return 0
 }
 
@@ -161,7 +172,6 @@ get_all_filenames() {
 download_and_install_single() {
     local filename="$1"
     local download_url=$(get_download_url "$filename")
-    
     [ -z "$download_url" ] && {
         log "    ✗ 未找到下载地址: $filename"
         return 1
@@ -171,14 +181,11 @@ download_and_install_single() {
         log "    ✗ 下载失败"
         return 1
     }
-    
     validate_downloaded_file "/tmp/$filename" 10240 || {
         rm -f "/tmp/$filename"
         return 1
     }
-    
     log "    安装: $filename"
-    
     if $PKG_INSTALL "/tmp/$filename" >>"$LOG_FILE" 2>&1; then
         log "    ✓ 安装成功"
         rm -f "/tmp/$filename"
@@ -194,21 +201,17 @@ download_and_install_single() {
 # 匹配并下载安装
 match_and_download() {
     local assets_json="$1" pkg_name="$2" platform="$3"
-    
     local app_name=$(extract_app_name "$pkg_name")
     log "  应用名: $app_name"
     extract_filenames "$assets_json" || {
         log "  ✗ 文件名提取失败，平台: $platform"
         return 1
     }
-    
     local all_files=$(get_all_filenames)
-    
     [ -z "$all_files" ] && { 
         log "  ✗ 未找到任何 $PKG_EXT 文件，平台: $platform"
         return 1
     }
-    
     local file_count=$(echo "$all_files" | wc -l)
     log "  找到 $file_count 个 $PKG_EXT 文件"
     if [ "$file_count" -le 5 ]; then
@@ -223,16 +226,12 @@ match_and_download() {
         done
         log "    ... 还有 $((file_count - 5)) 个文件"
     fi
-    
     local success_count=0
     local old_IFS="$IFS"
-    log "  查找架构包..."
     local arch_found=0
     for arch in $ARCH_FALLBACK; do
         [ $arch_found -eq 1 ] && break
-        
         local arch_matched=0
-        
         IFS=$'\n'
         for filename in $all_files; do
             IFS="$old_IFS"
@@ -252,12 +251,10 @@ match_and_download() {
         done
         [ $arch_matched -eq 1 ] && break
     done
-    log "  查找Luci包..."
     IFS=$'\n'
     for filename in $all_files; do
         IFS="$old_IFS"
         [ -z "$filename" ] && continue
-        
         case "$filename" in
             luci-app-${app_name}_*${PKG_EXT}|luci-app-${app_name}-*${PKG_EXT}|\
             luci-theme-${app_name}_*${PKG_EXT}|luci-theme-${app_name}-*${PKG_EXT})
@@ -267,8 +264,6 @@ match_and_download() {
                 ;;
         esac
     done
-    
-    log "  查找语言包..."
     IFS=$'\n'
     for filename in $all_files; do
         IFS="$old_IFS"
@@ -282,13 +277,9 @@ match_and_download() {
                 ;;
         esac
     done
-    
     IFS="$old_IFS"
-    
-    # 清理缓存
     ASSETS_JSON_CACHE=""
     ASSET_FILENAMES=""
-    
     if [ $success_count -gt 0 ]; then
         log "  ✓ 成功安装 $success_count 个文件"
         return 0
@@ -303,28 +294,19 @@ match_and_download() {
 # 统一的包处理函数
 process_package() {
     local pkg="$1" check_version="${2:-0}" current_ver="$3"
-    
     log "处理包: $pkg"
-    
     for source_config in $API_SOURCES; do
         local platform=$(echo "$source_config" | cut -d'|' -f1)
         local owner=$(echo "$source_config" | cut -d'|' -f2 | cut -d'/' -f1)
-        
         log "  平台: $platform ($owner/$pkg)"
-        
         local releases_json=$(api_get_latest_release "$platform" "$owner" "$pkg")
-        
         echo "$releases_json" | grep -q '\[' || {
             log "  ✗ 获取releases失败"
             continue
         }
-        
         local latest_tag=$(echo "$releases_json" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)
-        
         [ -z "$latest_tag" ] && { log "  ✗ 未找到版本"; continue; }
-        
         log "  最新版本: $latest_tag"
-        
         if [ "$check_version" = "1" ]; then
             version_greater "$latest_tag" "$current_ver" || { 
                 log "  ○ 当前版本已是最新 ($current_ver)"
@@ -487,10 +469,8 @@ install_language_package() {
     else
         apk search "$lang_pkg" 2>/dev/null | grep -q "^$lang_pkg" || return 0
     fi
-    
     local action="安装"
     is_installed "$lang_pkg" && action="升级"
-    
     log "    ${action}语言包 $lang_pkg..."
     $PKG_INSTALL "$lang_pkg" >>"$LOG_FILE" 2>&1 && log "    ✓ $lang_pkg ${action}成功" || log "    ⚠ $lang_pkg ${action}失败"
 }
