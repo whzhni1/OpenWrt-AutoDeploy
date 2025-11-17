@@ -78,16 +78,19 @@ api_get_latest_release() {
     case "$platform" in
         gitee)
             api_url="https://gitee.com/api/v5/repos/${owner}/${repo}/releases"
-            [ -n "$token" ] && api_url="${api_url}?access_token=${token}"
-            curl -s "$api_url"
-            ;;
-        gitcode)
-            api_url="https://gitcode.com/api/v5/repos/${owner}/${repo}/releases"
             if [ -n "$token" ]; then
-                curl -s -H "Authorization: Bearer $token" "$api_url"
+                curl -s -H "Authorization: token $token" "$api_url"
             else
                 curl -s "$api_url"
             fi
+            ;;
+        gitcode)
+            api_url="https://gitcode.com/api/v5/repos/${owner}/${repo}/releases"
+            if [ -z "$token" ]; then
+                echo "[]"
+                return 1
+            fi
+            curl -s -H "Authorization: Bearer $token" "$api_url"
             ;;
         *) return 1 ;;
     esac
