@@ -6,7 +6,7 @@ CONFIG_BACKUP_DIR="/tmp/config_Backup"
 DEVICE_MODEL="$(cat /tmp/sysinfo/model 2>/dev/null || echo '未知设备')"
 PUSH_TITLE="$DEVICE_MODEL 插件更新通知"
 USER_AGENT="Mozilla/5.0 (compatible; OpenWrt-AutoUpdate/2.0)"
-EXCLUDE_PACKAGES="kernel kmod- base-files busybox lib opkg uclient-fetch ca-bundle ca-certificates luci-app-lucky"
+EXCLUDE_PACKAGES="kernel kmod- base-files busybox lib opkg uclient-fetch ca-bundle ca-certificates luci-app-lucky luci-app-openlist2 luci-app-tailscale"
 EMPTY_VARS="SYS_ARCH ARCH_FALLBACK PKG_EXT PKG_INSTALL PKG_UPDATE AUTO_UPDATE CRON_TIME INSTALL_PRIORITY GITEE_TOKEN GITCODE_TOKEN THIRD_PARTY_INSTALLED API_SOURCES ASSET_FILENAMES ASSETS_JSON_CACHE"
 
 for var in $EMPTY_VARS; do eval "$var=''"; done
