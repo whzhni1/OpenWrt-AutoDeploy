@@ -1,6 +1,6 @@
 #!/bin/sh
 
-SCRIPT_VERSION="2.1.0"
+SCRIPT_VERSION="2.1.1"
 LOG_FILE="/tmp/auto-update.log"
 CONFIG_BACKUP_DIR="/tmp/config_Backup"
 DEVICE_MODEL="$(cat /tmp/sysinfo/model 2>/dev/null || echo '未知设备')"
@@ -47,6 +47,10 @@ format_size() {
     esac
 }
 
+# 转小写函数
+to_lower() {
+    echo "$1" | tr 'A-Z' 'a-z'
+}
 # 验证下载文件
 validate_downloaded_file() {
     local filepath="$1" min_size="${2:-1024}"
@@ -220,7 +224,7 @@ match_and_download() {
     fi
     local success_count=0
     local old_IFS="$IFS"
-    local app_name_lower=$(echo "$app_name" | tr 'A-Z' 'a-z')
+    local app_name_lower=$(to_lower "$app_name")
     local arch_found=0
     for arch in $ARCH_FALLBACK; do
         [ $arch_found -eq 1 ] && break
@@ -232,7 +236,7 @@ match_and_download() {
             case "$filename" in
                 luci-*) continue ;;
             esac
-            local filename_lower=$(echo "$filename" | tr 'A-Z' 'a-z')
+            local filename_lower=$(to_lower "$filename")
             if echo "$filename_lower" | grep -q "$arch" && echo "$filename_lower" | grep -q "$app_name_lower"; then
                 arch_matched=1
                 log "  [架构包] $filename (匹配: $arch)"
@@ -249,7 +253,7 @@ match_and_download() {
     for filename in $all_files; do
         IFS="$old_IFS"
         [ -z "$filename" ] && continue
-        local filename_lower=$(echo "$filename" | tr 'A-Z' 'a-z')
+        local filename_lower=$(to_lower "$filename")
         case "$filename_lower" in
             luci-app-${app_name_lower}_*${PKG_EXT}|luci-app-${app_name_lower}-*${PKG_EXT}|\
             luci-theme-${app_name_lower}_*${PKG_EXT}|luci-theme-${app_name_lower}-*${PKG_EXT})
@@ -263,7 +267,7 @@ match_and_download() {
     for filename in $all_files; do
         IFS="$old_IFS"
         [ -z "$filename" ] && continue
-        local filename_lower=$(echo "$filename" | tr 'A-Z' 'a-z')
+        local filename_lower=$(to_lower "$filename")
         case "$filename_lower" in
             *luci-i18n-*${app_name_lower}*zh-cn*${PKG_EXT}|*luci-i18n-*${app_name_lower}*zh_cn*${PKG_EXT})
                 log "  [语言包] $filename"
@@ -518,7 +522,9 @@ classify_packages() {
     fi
     local total=$(echo "$pkgs" | wc -l)
     log "检测到 $total 个已安装包（已排除语言包）"
+    local third_party_lower=$(to_lower "$THIRD_PARTY_INSTALLED")
     for pkg in $pkgs; do
+        local pkg_lower=$(to_lower "$pkg")
         if echo " $THIRD_PARTY_INSTALLED " | grep -q " $pkg "; then
             NON_OFFICIAL_PACKAGES="$NON_OFFICIAL_PACKAGES $pkg"
         elif is_package_excluded "$pkg"; then
@@ -596,9 +602,20 @@ update_thirdparty_packages() {
     [ $count -eq 0 ] && { log "没有需要检查的第三方插件"; return 0; }
     log "需要检查的第三方插件: $count 个"
     for pkg in $check_list; do
+        local pkg_lower=$(to_lower "$pkg")
+        local original_pkg=""
+        
+        for saved_pkg in $THIRD_PARTY_INSTALLED; do
+            local saved_pkg_lower=$(to_lower "$saved_pkg")
+            if [ "$pkg_lower" = "$saved_pkg_lower" ]; then
+                original_pkg="$saved_pkg"
+                break
+            fi
+        done
+        [ -z "$original_pkg" ] && original_pkg="$pkg"
         local cur=$(get_package_version list-installed "$pkg")
-        log "🔍 检查 $pkg (当前版本: $cur)"
-        process_package "$pkg" 1 "$cur"
+        log "🔍 检查 $original_pkg (当前版本: $cur)"
+        process_package "$original_pkg" 1 "$cur"
         local ret=$?
         case $ret in
             0) THIRDPARTY_UPDATED=$((THIRDPARTY_UPDATED + 1)) ;;
