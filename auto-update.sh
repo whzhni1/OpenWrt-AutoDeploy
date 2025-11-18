@@ -224,17 +224,21 @@ match_and_download() {
     local file_count=$(echo "$all_files" | wc -l)
     log "  找到 $file_count 个 $PKG_EXT 文件"
     
-    # 显示文件列表
     if [ "$file_count" -le 5 ]; then
         log "  文件列表:"
-        echo "$all_files" | while read fname; do [ -n "$fname" ] && log "    - $fname"; done
+        echo "$all_files" | while read fname; do
+            [ -n "$fname" ] && log "    - $fname"
+        done
     else
         log "  文件列表（前5个）:"
-        echo "$all_files" | head -5 | while read fname; do [ -n "$fname" ] && log "    - $fname"; done
+        echo "$all_files" | head -5 | while read fname; do
+            [ -n "$fname" ] && log "    - $fname"
+        done
         log "    ... 还有 $((file_count - 5)) 个文件"
     fi
     
-    local success_count=0 old_IFS="$IFS"
+    local success_count=0
+    local old_IFS="$IFS"
     local app_name_lower=$(to_lower "$app_name")
     
     # 1. 查找架构包
@@ -242,15 +246,21 @@ match_and_download() {
     local arch_found=0
     for arch in $ARCH_FALLBACK; do
         [ $arch_found -eq 1 ] && break
+        local arch_matched=0
         
         IFS=$'\n'
         for filename in $all_files; do
             IFS="$old_IFS"
             [ -z "$filename" ] && continue
-            case "$filename" in luci-*) continue ;; esac
+            
+            case "$filename" in
+                luci-*) continue ;;
+            esac
             
             local filename_lower=$(to_lower "$filename")
+            
             if echo "$filename_lower" | grep -q "$arch" && echo "$filename_lower" | grep -q "$app_name_lower"; then
+                arch_matched=1
                 log "  [架构包] $filename (匹配: $arch)"
                 if download_and_install_single "$filename"; then
                     success_count=$((success_count + 1))
@@ -259,9 +269,11 @@ match_and_download() {
                 break
             fi
         done
+        
+        [ $arch_matched -eq 1 ] && break
     done
     
-    # 2. 查找 Luci 包
+    # 2. 查找Luci包
     log "  查找Luci包..."
     IFS=$'\n'
     for filename in $all_files; do
@@ -269,6 +281,7 @@ match_and_download() {
         [ -z "$filename" ] && continue
         
         local filename_lower=$(to_lower "$filename")
+        
         case "$filename_lower" in
             luci-app-${app_name_lower}_*${PKG_EXT}|luci-app-${app_name_lower}-*${PKG_EXT}|\
             luci-theme-${app_name_lower}_*${PKG_EXT}|luci-theme-${app_name_lower}-*${PKG_EXT})
@@ -287,6 +300,7 @@ match_and_download() {
         [ -z "$filename" ] && continue
         
         local filename_lower=$(to_lower "$filename")
+        
         case "$filename_lower" in
             *luci-i18n-*${app_name_lower}*zh-cn*${PKG_EXT}|*luci-i18n-*${app_name_lower}*zh_cn*${PKG_EXT})
                 log "  [语言包] $filename"
@@ -295,7 +309,6 @@ match_and_download() {
                 ;;
         esac
     done
-    
     IFS="$old_IFS"
     ASSETS_JSON_CACHE=""
     ASSET_FILENAMES=""
@@ -315,8 +328,12 @@ match_and_download() {
 process_package() {
     local pkg="$1" check_version="${2:-0}" current_ver="$3"
     log "处理包: $pkg"
+    log "[调试] API_SOURCES 内容: $API_SOURCES"
+    log "[调试] API_SOURCES 行数: $(echo "$API_SOURCES" | wc -w)"
     for source_config in $API_SOURCES; do
+        log "[调试] 当前 source_config: $source_config"
         parse_source_config "$source_config"
+        log "[调试] 解析后 platform=$platform owner=$owner repo=$repo"
         log "  平台: $platform ($owner/$pkg)"
         local releases_json=$(api_get_latest_release "$platform" "$owner" "$pkg")
         echo "$releases_json" | grep -q '\[' || {
