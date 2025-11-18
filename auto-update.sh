@@ -362,42 +362,82 @@ run_install() {
 
 # 获取更新周期
 get_update_schedule() {
-    local cron_entry=$(crontab -l 2>/dev/null | grep "auto-update.sh" | grep -v "^#" | head -n1)
-    [ -z "$cron_entry" ] && { echo "未设置"; return; }
-    local minute=$(echo "$cron_entry" | awk '{print $1}')
-    local hour=$(echo "$cron_entry" | awk '{print $2}')
-    local day=$(echo "$cron_entry" | awk '{print $3}')
-    local weekday=$(echo "$cron_entry" | awk '{print $5}')
-    local week_name=""
-    case "$weekday" in
-        0|7) week_name="日" ;;
-        1) week_name="一" ;;
-        2) week_name="二" ;;
-        3) week_name="三" ;;
-        4) week_name="四" ;;
-        5) week_name="五" ;;
-        6) week_name="六" ;;
-    esac
-    local hour_str=""
-    [ "$hour" != "*" ] && ! echo "$hour" | grep -q "/" && hour_str=$(printf "%02d" "$hour")
-    case 1 in
-        $([ "$weekday" != "*" ])) [ -n "$hour_str" ] && echo "每周${week_name} ${hour_str}点" || echo "每周${week_name}" ;;
-        $(echo "$hour" | grep -q "^\*/")) echo "每$(echo $hour | sed 's/\*//')小时" ;;
-        $(echo "$day" | grep -q "^\*/")) local d=$(echo $day | sed 's/\*//'); [ -n "$hour_str" ] && echo "每${d}天 ${hour_str}点" || echo "每${d}天" ;;
-        $([ "$hour" != "*" ] && [ "$day" = "*" ])) echo "每天${hour_str}点" ;;
-        $(echo "$minute" | grep -q "^\*/")) echo "每$(echo $minute | sed 's/\*//')分钟" ;;
-        *) echo "$minute $hour $day * $weekday" ;;
-    esac
+    local c=$(crontab -l 2>/dev/null | grep "auto-update.sh" | grep -v "^#" | head -n1)
+    [ -z "$c" ] && { echo "未设置"; return; }
+    
+    local m=$(echo "$c" | awk '{print $1}')
+    local h=$(echo "$c" | awk '{print $2}')
+    local d=$(echo "$c" | awk '{print $3}')
+    local w=$(echo "$c" | awk '{print $5}')
+    
+    # 时间格式化
+    local t=""
+    if [ "$h" != "*" ] && ! echo "$h" | grep -q "/"; then
+        t=$(printf " %02d" "$h")
+        [ "$m" != "*" ] && ! echo "$m" | grep -q "/" && t=$(printf " %02d:%02d" "$h" "$m") || t="${t}点"
+    fi
+    
+    # 星期
+    local wn=$(echo "$w" | sed 's/0/周日/;s/1/周一/;s/2/周二/;s/3/周三/;s/4/周四/;s/5/周五/;s/6/周六/;s/7/周日/')
+    
+    # 判断（单行返回）
+    [ "$w" != "*" ] && [ "$wn" != "$w" ] && { echo "每${wn}${t}"; return; }
+    echo "$h" | grep -q "^\*/" && { echo "每$(echo $h | sed 's#\*/##')小时"; return; }
+    echo "$d" | grep -q "^\*/" && { echo "每$(echo $d | sed 's#\*/##')天${t}"; return; }
+    [ "$h" != "*" ] && [ "$d" = "*" ] && { echo "每天${t}"; return; }
+    echo "$m" | grep -q "^\*/" && { echo "每$(echo $m | sed 's#\*/##')分钟"; return; }
+    [ "$d" != "*" ] && { echo "每月${d}号${t}"; return; }
+    
+    echo "$m $h $d * $w"
 }
 
 # 状态推送
 send_status_push() {
     : > "$LOG_FILE"
     log "发送状态推送"
-    load_config
+    
+    # 加载配置
+    local conf="/etc/auto-setup.conf"
+    if [ -f "$conf" ]; then
+        . "$conf"
+    else
+        log "✗ 配置文件不存在"
+        return 1
+    fi
+    
+    # 获取更新周期
     local schedule=$(get_update_schedule)
-    local message="自动更新已打开\n\n**脚本版本**: $SCRIPT_VERSION\n**自动更新时间**: $schedule\n\n---\n设备: $DEVICE_MODEL\n时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    log "推送内容: 版本 $SCRIPT_VERSION, 计划 $schedule"
+    
+    # 获取优先级策略
+    local strategy_text=""
+    case "$INSTALL_PRIORITY" in
+        1) strategy_text="官方源优先" ;;
+        *) strategy_text="第三方源优先" ;;
+    esac
+    
+    # 构建消息内容
+    local message="✅ 自动更新已启用\n\n"
+    message="${message}**📌 基本信息**\n"
+    message="${message}• 脚本版本: v${SCRIPT_VERSION}\n"
+    message="${message}• 设备型号: ${DEVICE_MODEL}\n"
+    message="${message}• 系统架构: ${SYS_ARCH}\n\n"
+    message="${message}**⏰ 更新计划**\n"
+    message="${message}• 更新时间: ${schedule}\n"
+    message="${message}• 安装策略: ${strategy_text}\n\n"
+    message="${message}**📦 第三方包**\n"
+    if [ -n "$THIRD_PARTY_INSTALLED" ]; then
+        local count=$(echo "$THIRD_PARTY_INSTALLED" | wc -w)
+        message="${message}• 已安装: ${count} 个\n"
+        for pkg in $THIRD_PARTY_INSTALLED; do
+            message="${message}  - ${pkg}\n"
+        done
+    else
+        message="${message}• 无\n"
+    fi
+    message="${message}\n---\n"
+    message="${message}⏱ 推送时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    log "推送内容: 版本 $SCRIPT_VERSION, 计划 $schedule, 策略 $strategy_text"
     send_push "$PUSH_TITLE" "$message"
     log "状态推送完成"
 }
