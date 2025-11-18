@@ -525,7 +525,7 @@ classify_packages() {
     local third_party_lower=$(to_lower "$THIRD_PARTY_INSTALLED")
     for pkg in $pkgs; do
         local pkg_lower=$(to_lower "$pkg")
-        if echo " $THIRD_PARTY_INSTALLED " | grep -q " $pkg "; then
+        if echo " $third_party_lower " | grep -q " $pkg_lower "; then
             NON_OFFICIAL_PACKAGES="$NON_OFFICIAL_PACKAGES $pkg"
         elif is_package_excluded "$pkg"; then
             EXCLUDED_COUNT=$((EXCLUDED_COUNT + 1))
