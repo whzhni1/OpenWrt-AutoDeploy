@@ -65,7 +65,6 @@ to_lower() {
 validate_downloaded_file() {
     local filepath="$1" min_size="${2:-1024}"
     [ ! -f "$filepath" ] || [ ! -s "$filepath" ] && { log "  ✗ 文件不存在或为空: $filepath"; return 1; }
-    
     local size=$(wc -c < "$filepath" 2>/dev/null | tr -d ' ' || echo "0")
     [ "$size" -lt "$min_size" ] && head -1 "$filepath" 2>/dev/null | grep -qi "<!DOCTYPE\|<html" && {
         log "  ✗ 下载的是HTML页面: $filepath"
@@ -205,22 +204,17 @@ match_and_download() {
     local assets_json="$1" pkg_name="$2" platform="$3"
     local app_name=$(extract_app_name "$pkg_name")
     log "  应用名: $app_name"
-    
     extract_filenames "$assets_json" || {
         log "  ✗ 文件名提取失败，平台: $platform"
         return 1
     }
-    
     local all_files=$(get_all_filenames)
     [ -z "$all_files" ] && { 
         log "  ✗ 未找到任何 $PKG_EXT 文件，平台: $platform"
         return 1
     }
-    
     local file_count=$(echo "$all_files" | wc -l)
     log "  找到 $file_count 个 $PKG_EXT 文件"
-    
-    # 显示文件列表
     if [ "$file_count" -le 5 ]; then
         log "  文件列表:"
         echo "$all_files" | while read fname; do [ -n "$fname" ] && log "    - $fname"; done
@@ -229,43 +223,29 @@ match_and_download() {
         echo "$all_files" | head -5 | while read fname; do [ -n "$fname" ] && log "    - $fname"; done
         log "    ... 还有 $((file_count - 5)) 个文件"
     fi
-    
     local success_count=0 old_IFS="$IFS"
     local app_name_lower=$(to_lower "$app_name")
-    
-    # 共用的查找安装函数
     find_and_install() {
         local pkg_type="$1" label="$2"
         local found=0
-        
-        # 架构包需要遍历架构
         if [ "$pkg_type" = "arch" ]; then
             for arch in $ARCH_FALLBACK; do
                 [ $found -eq 1 ] && break
                 search_files "$pkg_type" "$label" "$arch" && found=1
             done
         else
-            # luci 和 lang 直接查找
             search_files "$pkg_type" "$label"
         fi
     }
-    
-    # 共用的文件搜索函数
     search_files() {
         local pkg_type="$1" label="$2" arch="$3"
-        
         IFS=$'\n'
         for filename in $all_files; do
             IFS="$old_IFS"
             [ -z "$filename" ] && continue
-            
-            # 架构包跳过 luci
             [ "$pkg_type" = "arch" ] && case "$filename" in luci-*) continue ;; esac
-            
             local filename_lower=$(to_lower "$filename")
             local matched=0
-            
-            # 根据类型判断是否匹配
             case "$pkg_type" in
                 arch)
                     echo "$filename_lower" | grep -q "$arch" && echo "$filename_lower" | grep -q "$app_name_lower" && matched=1
@@ -284,8 +264,6 @@ match_and_download() {
                     esac
                     ;;
             esac
-            
-            # 匹配成功则下载安装
             if [ $matched -eq 1 ]; then
                 [ "$pkg_type" = "arch" ] && log "  [$label] $filename (匹配: $arch)" || log "  [$label] $filename"
                 download_and_install_single "$filename" && success_count=$((success_count + 1))
@@ -294,21 +272,12 @@ match_and_download() {
         done
         return 1
     }
-    
-    # 依次查找三种包
-    log "  查找架构包..."
     find_and_install "arch" "架构包"
-    
-    log "  查找Luci包..."
     find_and_install "luci" "Luci包"
-    
-    log "  查找语言包..."
     find_and_install "lang" "语言包"
-    
     IFS="$old_IFS"
     ASSETS_JSON_CACHE=""
     ASSET_FILENAMES=""
-    
     if [ $success_count -gt 0 ]; then
         log "  ✓ 成功安装 $success_count 个文件"
         return 0
@@ -324,12 +293,8 @@ match_and_download() {
 process_package() {
     local pkg="$1" check_version="${2:-0}" current_ver="$3"
     log "处理包: $pkg"
-    log "[调试] API_SOURCES 内容: $API_SOURCES"
-    log "[调试] API_SOURCES 行数: $(echo "$API_SOURCES" | wc -w)"
     for source_config in $API_SOURCES; do
-        log "[调试] 当前 source_config: $source_config"
         parse_source_config "$source_config"
-        log "[调试] 解析后 platform=$platform owner=$owner repo=$repo"
         log "  平台: $platform ($owner/$pkg)"
         local releases_json=$(api_get_latest_release "$platform" "$owner" "$pkg")
         echo "$releases_json" | grep -q '\[' || {
@@ -337,9 +302,7 @@ process_package() {
             continue
         }
         local latest_tag=$(echo "$releases_json" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)
-        
         [ -z "$latest_tag" ] && { log "  ✗ 未找到版本"; continue; }
-        
         log "  最新版本: $latest_tag"
         if [ "$check_version" = "1" ]; then
             version_greater "$latest_tag" "$current_ver" || { 
@@ -356,7 +319,6 @@ process_package() {
             log "  ✗ 安装失败"
         fi
     done
-    
     log "✗ $pkg 所有源均失败"
     return 1
 }
@@ -381,7 +343,6 @@ save_third_party_to_config() {
 # install模式
 run_install() {
     local packages="$*"
-    
     log "第三方源安装模式"
     log "包列表: $packages"
     load_config || return 1
@@ -412,22 +373,17 @@ run_install() {
 get_update_schedule() {
     local c=$(crontab -l 2>/dev/null | grep "auto-update.sh" | grep -v "^#" | head -n1)
     [ -z "$c" ] && { echo "未设置"; return; }
-    
     local m=$(echo "$c" | awk '{print $1}')
     local h=$(echo "$c" | awk '{print $2}')
     local d=$(echo "$c" | awk '{print $3}')
     local w=$(echo "$c" | awk '{print $5}')
-    
     # 时间格式化
     local t=""
     if [ "$h" != "*" ] && ! echo "$h" | grep -q "/"; then
         t=$(printf " %02d" "$h")
         [ "$m" != "*" ] && ! echo "$m" | grep -q "/" && t=$(printf " %02d:%02d" "$h" "$m") || t="${t}点"
     fi
-    
-    # 星期
     local wn=$(echo "$w" | sed 's/0/周日/;s/1/周一/;s/2/周二/;s/3/周三/;s/4/周四/;s/5/周五/;s/6/周六/;s/7/周日/')
-    
     # 判断（单行返回）
     [ "$w" != "*" ] && [ "$wn" != "$w" ] && { echo "每${wn}${t}"; return; }
     echo "$h" | grep -q "^\*/" && { echo "每$(echo $h | sed 's#\*/##')小时"; return; }
@@ -435,7 +391,6 @@ get_update_schedule() {
     [ "$h" != "*" ] && [ "$d" = "*" ] && { echo "每天${t}"; return; }
     echo "$m" | grep -q "^\*/" && { echo "每$(echo $m | sed 's#\*/##')分钟"; return; }
     [ "$d" != "*" ] && { echo "每月${d}号${t}"; return; }
-    
     echo "$m $h $d * $w"
 }
 
