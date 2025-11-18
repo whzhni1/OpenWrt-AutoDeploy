@@ -348,16 +348,30 @@ save_third_party_to_config() {
 # install模式
 run_install() {
     local packages="$*"
+    
     log "第三方源安装模式"
     log "包列表: $packages"
-    local installed="" failed=""
+    INSTALLED_PACKAGES=""
+    FAILED_PACKAGES=""
     for pkg in $packages; do
         log ""
-        process_package "$pkg" 0 && installed="$installed $pkg" || failed="$failed $pkg"
+        if process_package "$pkg" 0; then
+            INSTALLED_PACKAGES="$INSTALLED_PACKAGES $pkg"
+        else
+            FAILED_PACKAGES="$FAILED_PACKAGES $pkg"
+        fi
     done
-    [ -n "$installed" ] && save_third_party_to_config "$installed"
+    [ -n "$INSTALLED_PACKAGES" ] && save_third_party_to_config "$INSTALLED_PACKAGES"
     log ""
-    log "安装汇总: 成功 $(echo $installed | wc -w), 失败 $(echo $failed | wc -w)"
+    log "安装汇总: 成功 $(echo $INSTALLED_PACKAGES | wc -w), 失败 $(echo $FAILED_PACKAGES | wc -w)"
+    if [ -n "$INSTALLED_PACKAGES" ] || [ -n "$FAILED_PACKAGES" ]; then
+        local report=$(generate_report "install")
+        log ""
+        log "$report"
+        send_push "$DEVICE_MODEL - 包安装结果" "$report"
+    fi
+    # 返回失败状态给 auto-setup
+    [ -z "$FAILED_PACKAGES" ] && return 0 || return 1
 }
 
 # 获取更新周期
@@ -389,57 +403,6 @@ get_update_schedule() {
     [ "$d" != "*" ] && { echo "每月${d}号${t}"; return; }
     
     echo "$m $h $d * $w"
-}
-
-# 状态推送
-send_status_push() {
-    : > "$LOG_FILE"
-    log "发送状态推送"
-    
-    # 加载配置
-    local conf="/etc/auto-setup.conf"
-    if [ -f "$conf" ]; then
-        . "$conf"
-    else
-        log "✗ 配置文件不存在"
-        return 1
-    fi
-    
-    # 获取更新周期
-    local schedule=$(get_update_schedule)
-    
-    # 获取优先级策略
-    local strategy_text=""
-    case "$INSTALL_PRIORITY" in
-        1) strategy_text="官方源优先" ;;
-        *) strategy_text="第三方源优先" ;;
-    esac
-    
-    # 构建消息内容
-    local message="✅ 自动更新已启用\n\n"
-    message="${message}**📌 基本信息**\n"
-    message="${message}• 脚本版本: v${SCRIPT_VERSION}\n"
-    message="${message}• 设备型号: ${DEVICE_MODEL}\n"
-    message="${message}• 系统架构: ${SYS_ARCH}\n\n"
-    message="${message}**⏰ 更新计划**\n"
-    message="${message}• 更新时间: ${schedule}\n"
-    message="${message}• 安装策略: ${strategy_text}\n\n"
-    message="${message}**📦 第三方包**\n"
-    if [ -n "$THIRD_PARTY_INSTALLED" ]; then
-        local count=$(echo "$THIRD_PARTY_INSTALLED" | wc -w)
-        message="${message}• 已安装: ${count} 个\n"
-        for pkg in $THIRD_PARTY_INSTALLED; do
-            message="${message}  - ${pkg}\n"
-        done
-    else
-        message="${message}• 无\n"
-    fi
-    message="${message}\n---\n"
-    message="${message}⏱ 推送时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    
-    log "推送内容: 版本 $SCRIPT_VERSION, 计划 $schedule, 策略 $strategy_text"
-    send_push "$PUSH_TITLE" "$message"
-    log "状态推送完成"
 }
 
 # 包管理函数
@@ -720,33 +683,49 @@ check_script_update() {
 
 # 报告生成
 generate_report() {
-    local updates=$((OFFICIAL_UPDATED + THIRDPARTY_UPDATED))
-    local strategy="官方源优先"
-    [ "$INSTALL_PRIORITY" != "1" ] && strategy="第三方源优先"
-    local non_official_count=$(echo $NON_OFFICIAL_PACKAGES | wc -w)
-    local report="脚本版本: $SCRIPT_VERSION\n"
-    report="${report}==================\n"
-    report="${report}时间: $(date '+%Y-%m-%d %H:%M:%S')\n"
-    report="${report}设备: $DEVICE_MODEL\n"
-    report="${report}策略: $strategy\n\n"
-    report="${report}官方源检查完成:\n"
-    report="${report}  ✓ 升级: $OFFICIAL_UPDATED 个\n"
-    [ -n "$UPDATED_PACKAGES" ] && report="${report}$UPDATED_PACKAGES\n"
-    report="${report}  ○ 已是最新: $OFFICIAL_SKIPPED 个\n"
-    report="${report}  ⊗ 不在官方源: $non_official_count 个\n"
-    report="${report}  ⊝ 排除: $EXCLUDED_COUNT 个\n"
-    report="${report}  ✗ 失败: $OFFICIAL_FAILED 个\n"
-    [ -n "$FAILED_PACKAGES" ] && report="${report}$FAILED_PACKAGES\n"
-    report="${report}\n"
-    report="${report}第三方源检查完成:\n"
-    report="${report}  ✓ 已更新: $THIRDPARTY_UPDATED 个\n"
-    report="${report}  ○ 已是最新: $THIRDPARTY_SAME 个\n"
-    report="${report}  ✗ 失败: $THIRDPARTY_FAILED 个\n"
-    report="${report}\n"
-    [ $updates -eq 0 ] && report="${report}[提示] 所有软件包均为最新版本\n\n"
-    report="${report}==================\n"
-    report="${report}详细日志: $LOG_FILE"
-    echo "$report"
+    local mode="$1" r="" schedule=$(get_update_schedule)
+    local strategy=$([ "$INSTALL_PRIORITY" = "1" ] && echo "官方源优先" || echo "第三方源优先")
+    a() { r="${r}$1\n"; }
+    # 模式特定内容
+    if [ "$mode" = "install" ]; then
+        local sc=$(echo $INSTALLED_PACKAGES | wc -w) fc=$(echo $FAILED_PACKAGES | wc -w)
+        a "📦 包安装结果"; a "=================="; a "时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        a "设备: $DEVICE_MODEL"; a "版本: v$SCRIPT_VERSION"; a ""
+        a "安装结果:"; [ $sc -gt 0 ] && a "  ✓ 成功: $sc 个"
+        [ $fc -gt 0 ] && a "  ✗ 失败: $fc 个（将由官方源安装）"; a ""
+        if [ $sc -gt 0 ]; then a "已安装:"; for p in $INSTALLED_PACKAGES; do a "  - $p"; done; a ""; fi
+        if [ $fc -gt 0 ]; then a "未找到仓库:"; for p in $FAILED_PACKAGES; do a "  - $p"; done; a ""; fi
+    else
+        local noc=$(echo $NON_OFFICIAL_PACKAGES | wc -w)
+        a "脚本版本: $SCRIPT_VERSION"; a "=================="; a "时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        a "设备: $DEVICE_MODEL"; a "策略: $strategy"; a ""
+        a "官方源检查完成:"; a "  ✓ 升级: $OFFICIAL_UPDATED 个"
+        [ -n "$UPDATED_PACKAGES" ] && a "$UPDATED_PACKAGES"
+        a "  ○ 已是最新: $OFFICIAL_SKIPPED 个"; a "  ⊗ 不在官方源: $noc 个"
+        a "  ⊝ 排除: $EXCLUDED_COUNT 个"; a "  ✗ 失败: $OFFICIAL_FAILED 个"
+        [ -n "$FAILED_PACKAGES" ] && a "$FAILED_PACKAGES"; a ""
+        a "第三方源检查完成:"; a "  ✓ 已更新: $THIRDPARTY_UPDATED 个"
+        a "  ○ 已是最新: $THIRDPARTY_SAME 个"; a "  ✗ 失败: $THIRDPARTY_FAILED 个"; a ""
+        [ $((OFFICIAL_UPDATED + THIRDPARTY_UPDATED)) -eq 0 ] && a "[提示] 所有软件包均为最新版本" && a ""
+    fi
+    
+    # 通用部分
+    a "⏰ 自动更新: $([ "$schedule" != "未设置" ] && echo "已启用" || echo "未设置")"
+    [ "$schedule" != "未设置" ] && { a "  - 更新时间: ${schedule}"; a "  - 安装策略: ${strategy}"; }
+    
+    if [ -n "$THIRD_PARTY_INSTALLED" ]; then
+        a ""; a "📦 第三方包: $(echo "$THIRD_PARTY_INSTALLED" | wc -w) 个"
+        for pkg in $THIRD_PARTY_INSTALLED; do
+            if [ "$mode" = "install" ] && echo " $INSTALLED_PACKAGES " | grep -q " $pkg "; then
+                a "  - $pkg 🆕"
+            else
+                a "  - $pkg"
+            fi
+        done
+    fi
+    
+    a ""; a "=================="; a "详细日志: $LOG_FILE"
+    echo "$r"
 }
 
 # update模式
@@ -756,7 +735,8 @@ run_update() {
     log "OpenWrt 自动更新脚本 v${SCRIPT_VERSION}"
     log "开始执行 (PID: $$)"
     log "日志文件: $LOG_FILE"
-    load_config || return 1
+    local conf="/etc/auto-setup.conf"
+    [ -f "$conf" ] && . "$conf"
     echo "$PKG_INSTALL" | grep -q "opkg" && PKG_UPDATE="opkg update" || PKG_UPDATE="apk update"
     log "系统架构: $SYS_ARCH"
     log "包管理器: $(echo $PKG_INSTALL | awk '{print $1}')"
@@ -782,14 +762,14 @@ run_update() {
         log "备份目录: $CONFIG_BACKUP_DIR"
     }
     log "✓ 更新流程完成"
-    local report=$(generate_report)
+    local report=$(generate_report "update")
+    log ""
     log "$report"
     send_push "$PUSH_TITLE" "$report"
 }
 
 # 参数处理
 case "$1" in
-    ts) send_status_push ;;
-    install) shift; load_config && run_install "$@" ;;
+    install) shift; run_install "$@" ;;
     *) run_update ;;
 esac
