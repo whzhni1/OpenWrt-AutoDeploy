@@ -334,7 +334,6 @@ setup_crontab() {
     log "配置自动更新: $CRON_TIME"
     (crontab -l 2>/dev/null | grep -v "$UPDATE_PATH"; echo "$CRON_TIME $UPDATE_PATH") | crontab - && {
         log "✓ 定时任务已添加"
-        "$UPDATE_PATH" ts &
         return 0
     }
     log "✗ 定时任务添加失败，命令: $CRON_TIME $UPDATE_PATH"
