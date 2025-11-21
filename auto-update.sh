@@ -12,7 +12,7 @@ for var in ASSETS_JSON_CACHE INSTALLED_LIST FAILED_LIST OFFICIAL_PACKAGES NON_OF
     eval "$var=''"
 done
 
-for var in OFFICIAL_UPDATED OFFICIAL_SKIPPED OFFICIAL_FAILED THIRDPARTY_UPDATED THIRDPARTY_SAME THIRDPARTY_FAILED; do
+for var in OFFICIAL_UPDATED OFFICIAL_SKIPPED OFFICIAL_FAILED THIRDPARTY_UPDATED THIRDPARTY_SAME THIRDPARTY_FAILED excluded; do
     eval "$var=0"
 done
 
@@ -233,8 +233,8 @@ run_install() {
     if [ $success -gt 0 ] || [ $failed -gt 0 ]; then
         generate_report "install"
         log ""
-        echo "$REPORT"
-        send_push "$DEVICE_MODEL - 包安装结果" "$REPORT"
+        echo -e "$REPORT"
+        send_push "$PUSH_TITLE" "$REPORT"
     fi
     
     [ $failed -eq 0 ]
@@ -278,7 +278,6 @@ classify_packages() {
     
     local all=$($PKG_LIST_INSTALLED 2>/dev/null | awk '{print $1}' | grep -v "^luci-i18n-")
     local third_lower=$(to_lower "$THIRD_PARTY_INSTALLED")
-    local excluded=0
     
     [ -n "$THIRD_PARTY_INSTALLED" ] && log "第三方记录: $THIRD_PARTY_INSTALLED"
     
@@ -355,9 +354,16 @@ update_thirdparty() {
         
         process_package "$orig" 1 "$cur"
         case $? in
-            0) THIRDPARTY_UPDATED=$((THIRDPARTY_UPDATED+1)) ;;
+            0) 
+                local new=$(get_version "$pkg" installed)
+                UPDATED_PACKAGES="${UPDATED_PACKAGES}\n    - $orig: $cur → $new"
+                THIRDPARTY_UPDATED=$((THIRDPARTY_UPDATED+1)) 
+                ;;
             2) THIRDPARTY_SAME=$((THIRDPARTY_SAME+1)) ;;
-            *) THIRDPARTY_FAILED=$((THIRDPARTY_FAILED+1)) ;;
+            *) 
+                FAILED_PACKAGES="${FAILED_PACKAGES}\n    - $orig"
+                THIRDPARTY_FAILED=$((THIRDPARTY_FAILED+1)) 
+                ;;
         esac
     done
     
@@ -436,29 +442,32 @@ generate_report() {
     local schedule="未设置"
     
     if [ -n "$cron" ]; then
-        local h=$(echo "$cron" | awk '{print $2}')
-        local m=$(echo "$cron" | awk '{print $1}')
-        echo "$h" | grep -q "^\*/" && schedule="每$(echo $h|sed 's#\*/##')小时" || \
-        [ "$h" != "*" ] && schedule="每天 $(printf "%02d:%02d" "$h" "${m:-0}")"
+        set -- $(echo "$cron" | awk '{print $1, $2, $5}')  # m h dow
+        case "$3" in
+            [0-6]) schedule="每周$(echo $3|sed 's/0/日/;s/1/一/;s/2/二/;s/3/三/;s/4/四/;s/5/五/;s/6/六/') $(printf "%02d:%02d" ${2:-0} ${1:-0})" ;;
+            *) echo "$2"|grep -q "^\*/" && schedule="每$(echo $2|sed 's#\*/##')小时" || [ "$2" != "*" ] && schedule="每天 $(printf "%02d:%02d" $2 ${1:-0})" ;;
+        esac
     fi
-    
-    REPORT=""
     
     if [ "$mode" = "install" ]; then
         REPORT="📦 包安装结果\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n设备: $DEVICE_MODEL\n\n"
-        REPORT="${REPORT}✓ 成功: $(echo $INSTALLED_LIST|wc -w) 个\n"
-        REPORT="${REPORT}✗ 失败: $(echo $FAILED_LIST|wc -w) 个\n\n"
         [ -n "$INSTALLED_LIST" ] && {
-            REPORT="${REPORT}已安装:\n"
-            for p in $INSTALLED_LIST; do REPORT="${REPORT}  - $p\n"; done
+            REPORT="${REPORT}✓ 成功 $(echo $INSTALLED_LIST|wc -w) 个:\n"
+            for p in $INSTALLED_LIST; do REPORT="${REPORT}√${p}\n"; done
+            REPORT="${REPORT}\n"
+        }
+        [ -n "$FAILED_LIST" ] && {
+            REPORT="${REPORT}✗ 失败 $(echo $FAILED_LIST|wc -w) 个:\n"
+            for p in $FAILED_LIST; do REPORT="${REPORT}✗${p}\n"; done
         }
     else
         REPORT="脚本版本: $SCRIPT_VERSION\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n\n"
-        REPORT="${REPORT}官方源: ✓$OFFICIAL_UPDATED ○$OFFICIAL_SKIPPED ✗$OFFICIAL_FAILED\n"
-        REPORT="${REPORT}第三方: ✓$THIRDPARTY_UPDATED ○$THIRDPARTY_SAME ✗$THIRDPARTY_FAILED\n\n"
-        REPORT="${REPORT}⏰ 自动更新: $schedule\n"
+        REPORT="${REPORT}官方源: ✓$OFFICIAL_UPDATED ○$OFFICIAL_SKIPPED ✗$OFFICIAL_FAILED"
+        [ -n "$UPDATED_PACKAGES" ] && REPORT="${REPORT}\n$(echo "$UPDATED_PACKAGES" | sed 's/^    - /√/')"
+        [ -n "$FAILED_PACKAGES" ] && REPORT="${REPORT}\n$(echo "$FAILED_PACKAGES" | sed 's/^    - /✗/')"
+        REPORT="${REPORT}\n第三方: ✓$THIRDPARTY_UPDATED ○$THIRDPARTY_SAME ✗$THIRDPARTY_FAILED\n"
     fi
-    
+    REPORT="${REPORT}⏰ 自动更新: $schedule\n"
     REPORT="${REPORT}\n详细日志: $LOG_FILE"
 }
 
@@ -483,7 +492,7 @@ run_update() {
     
     log "✓ 更新完成"
     generate_report "update"
-    echo "$REPORT"
+    echo -e "$REPORT"
     send_push "$PUSH_TITLE" "$REPORT"
 }
 
