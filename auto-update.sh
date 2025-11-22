@@ -8,7 +8,7 @@ PUSH_TITLE="$DEVICE_MODEL 插件更新通知"
 EXCLUDE_PACKAGES="kernel kmod- base-files busybox lib opkg uclient-fetch ca-bundle ca-certificates luci-app-lucky luci-app-openlist2 luci-app-tailscale"
 
 # 批量初始化变量
-for var in ASSETS_JSON_CACHE INSTALLED_LIST FAILED_LIST OFFICIAL_PACKAGES NON_OFFICIAL_PACKAGES UPDATED_PACKAGES FAILED_PACKAGES; do
+for var in ASSETS_JSON_CACHE INSTALLED_LIST FAILED_LIST OFFICIAL_PACKAGES NON_OFFICIAL_PACKAGES OFFICIAL_DETAIL THIRDPARTY_DETAIL; do
     eval "$var=''"
 done
 
@@ -28,19 +28,24 @@ load_config() {
     [ ! -f "$CONFIG_FILE" ] && { log "✗ 配置文件不存在"; return 1; }
     . "$CONFIG_FILE"
     
-    for key in SYS_ARCH PKG_INSTALL PKG_UPDATE PKG_LIST_INSTALLED API_SOURCES; do
+    for key in SYS_ARCH PKG_INSTALL PKG_UPDATE PKG_LIST_INSTALLED SCRIPT_URLS; do
         eval "[ -z \"\$$key\" ]" && { log "✗ 缺少配置: $key"; return 1; }
     done
     
     log "✓ 配置已加载"
 }
 
-# 解析源配置
-parse_source_config() {
-    platform=$(echo "$1" | cut -d'|' -f1)
-    repo=$(echo "$1" | cut -d'|' -f2)
-    branch=$(echo "$1" | cut -d'|' -f3)
+# 解析 Git 信息
+parse_git_info() {
+    local url="$1"
+    local normalized_url=$(echo "$url" | sed 's|raw\.gitcode|gitcode|')
+    
+    platform=$(echo "$normalized_url" | sed -n 's|.*://\([^.]*\)\..*|\1|p')
+    repo=$(echo "$normalized_url" | sed 's|.*://[^/]*/\([^/]*/[^/]*\)/.*|\1|')
+    branch=$(echo "$normalized_url" | sed 's|.*/raw/\([^/]*\)/.*|\1|')
     owner=$(echo "$repo" | cut -d'/' -f1)
+    
+    log "解析URL: $url -> 平台:$platform 仓库:$repo 分支:$branch"
 }
 
 # 工具函数
@@ -92,8 +97,7 @@ api_get_release() {
 # 查找并安装
 find_and_install() {
     local app="$1"
-    
-    # 1. 列出所有 PKG_EXT 文件
+
     local all_files=$(echo "$ASSETS_JSON_CACHE" | grep -o "\"[^\"]*${PKG_EXT}\"" | tr -d '"' | grep -v "/")
     [ -z "$all_files" ] && { log "  ✗ 未找到文件"; return 1; }
     log "  共 $(echo "$all_files" | wc -l) 个文件"
@@ -101,7 +105,6 @@ find_and_install() {
     local count=0
     local al=$(to_lower "$app")
     
-    # 2. 查找架构包（SYS_ARCH → ARCH_FALLBACK）
     for arch in $SYS_ARCH $ARCH_FALLBACK; do
         local file=$(echo "$all_files" | grep -v "^luci-" | grep -i "$al" | grep "$arch" | head -1)
         [ -n "$file" ] && {
@@ -110,15 +113,13 @@ find_and_install() {
             break
         }
     done
-    
-    # 3. 查找 luci 包
+
     local file=$(echo "$all_files" | grep -E "^luci-(app|theme)-${al}[-_]" | head -1)
     [ -n "$file" ] && {
         log "  [Luci包] $file"
         download_and_install "$file" && count=$((count+1))
     }
-    
-    # 4. 查找 zh-cn 语言包
+
     local file=$(echo "$all_files" | grep "zh-cn" | grep -i "$al" | head -1)
     [ -n "$file" ] && {
         log "  [语言包] $file"
@@ -162,8 +163,8 @@ process_package() {
     
     local app=$(echo "$pkg" | sed 's/^luci-app-//' | sed 's/^luci-theme-//')
     
-    for src in $API_SOURCES; do
-        parse_source_config "$src"
+    for src in $SCRIPT_URLS; do
+        parse_git_info "$url"
         log "  平台: $platform ($owner/$pkg)"
         
         local json=$(api_get_release "$platform" "$owner" "$pkg")
@@ -208,39 +209,34 @@ run_install() {
     log "包列表: $*"
     
     load_config || return 1
-    
-    local success=0 failed=0
-    
     for pkg in "$@"; do
         log ""
         if process_package "$pkg" 0; then
+            THIRDPARTY_DETAIL="${THIRDPARTY_DETAIL}\n√$pkg"
+            THIRDPARTY_UPDATED=$((THIRDPARTY_UPDATED+1))
             INSTALLED_LIST="$INSTALLED_LIST $pkg"
-            success=$((success+1))
         else
+            THIRDPARTY_DETAIL="${THIRDPARTY_DETAIL}\n✗$pkg"
+            THIRDPARTY_FAILED=$((THIRDPARTY_FAILED+1))
             FAILED_LIST="$FAILED_LIST $pkg"
-            failed=$((failed+1))
         fi
     done
     
     INSTALLED_LIST=$(echo "$INSTALLED_LIST" | xargs)
-    FAILED_LIST=$(echo "$FAILED_LIST" | xargs)
-    
     [ -n "$INSTALLED_LIST" ] && save_third_party "$INSTALLED_LIST"
     
     log ""
-    log "安装汇总: 成功 $success, 失败 $failed"
+    log "安装汇总: 成功 $THIRDPARTY_UPDATED, 失败 $THIRDPARTY_FAILED"
     
-    if [ $success -gt 0 ] || [ $failed -gt 0 ]; then
-        generate_report "install"
-        log ""
-        echo -e "$REPORT"
-        send_push "$PUSH_TITLE" "$REPORT"
-    fi
+    generate_report "install"
+    log ""
+    echo -e "$REPORT"
+    send_push "$DEVICE_MODEL - 包安装结果" "$REPORT"
     
-    [ $failed -eq 0 ]
+    [ $THIRDPARTY_FAILED -eq 0 ]
 }
 
-# update 模式需要检查已安装
+# update 模式检查已安装
 is_installed() {
     $PKG_LIST_INSTALLED 2>/dev/null | grep -q "^$1 "
 }
@@ -308,12 +304,12 @@ update_official() {
             log "↻ $pkg: $cur → $new"
             $PKG_INSTALL "$pkg" >>"$LOG_FILE" 2>&1 && {
                 log "  ✓ 升级成功"
-                UPDATED_PACKAGES="${UPDATED_PACKAGES}\n    - $pkg: $cur → $new"
+                OFFICIAL_DETAIL="${OFFICIAL_DETAIL}\n√$pkg: $cur → $new"
                 OFFICIAL_UPDATED=$((OFFICIAL_UPDATED+1))
                 install_lang "$pkg"
             } || {
                 log "  ✗ 升级失败"
-                FAILED_PACKAGES="${FAILED_PACKAGES}\n    - $pkg"
+                OFFICIAL_DETAIL="${OFFICIAL_DETAIL}\n✗$pkg: $cur → $new"
                 OFFICIAL_FAILED=$((OFFICIAL_FAILED+1))
             }
         } || {
@@ -356,12 +352,12 @@ update_thirdparty() {
         case $? in
             0) 
                 local new=$(get_version "$pkg" installed)
-                UPDATED_PACKAGES="${UPDATED_PACKAGES}\n    - $orig: $cur → $new"
+                THIRDPARTY_DETAIL="${THIRDPARTY_DETAIL}\n√$orig: $cur → $new"
                 THIRDPARTY_UPDATED=$((THIRDPARTY_UPDATED+1)) 
                 ;;
             2) THIRDPARTY_SAME=$((THIRDPARTY_SAME+1)) ;;
             *) 
-                FAILED_PACKAGES="${FAILED_PACKAGES}\n    - $orig"
+                THIRDPARTY_DETAIL="${THIRDPARTY_DETAIL}\n✗$orig"
                 THIRDPARTY_FAILED=$((THIRDPARTY_FAILED+1)) 
                 ;;
         esac
@@ -374,20 +370,17 @@ update_thirdparty() {
 check_script_update() {
     log "当前版本: $SCRIPT_VERSION"
     local tmp="/tmp/auto-update-new.sh"
-    
-    for src in $API_SOURCES; do
-        parse_source_config "$src"
-        local url=$([ "$platform" = "gitcode" ] && \
-            echo "https://raw.gitcode.com/${repo}/raw/${branch}/auto-update.sh" || \
-            echo "https://gitee.com/${repo}/raw/${branch}/auto-update.sh")
-        
-        curl -fsSL -o "$tmp" "$url" 2>/dev/null || continue
+
+    for url in $SCRIPT_URLS; do
+        local update_url=$(echo "$url" | sed 's/auto-setup.conf$/auto-update.sh/')
+
+        curl -fsSL -o "$tmp" "$update_url" 2>/dev/null || continue
         grep -q "run_update" "$tmp" || { rm -f "$tmp"; continue; }
         
         local ver=$(sed -n 's/^SCRIPT_VERSION="\(.*\)"/\1/p' "$tmp" | head -1)
         [ -z "$ver" ] && continue
         [ "$SCRIPT_VERSION" = "$ver" ] && { rm -f "$tmp"; return; }
-        
+
         version_greater "$ver" "$SCRIPT_VERSION" && {
             log "↻ 发现新版本: $SCRIPT_VERSION → $ver"
             mv "$tmp" "$(readlink -f "$0")" && chmod +x "$(readlink -f "$0")" && {
@@ -442,33 +435,21 @@ generate_report() {
     local schedule="未设置"
     
     if [ -n "$cron" ]; then
-        set -- $(echo "$cron" | awk '{print $1, $2, $5}')  # m h dow
+        set -- $(echo "$cron" | awk '{print $1, $2, $5}')
         case "$3" in
             [0-6]) schedule="每周$(echo $3|sed 's/0/日/;s/1/一/;s/2/二/;s/3/三/;s/4/四/;s/5/五/;s/6/六/') $(printf "%02d:%02d" ${2:-0} ${1:-0})" ;;
             *) echo "$2"|grep -q "^\*/" && schedule="每$(echo $2|sed 's#\*/##')小时" || [ "$2" != "*" ] && schedule="每天 $(printf "%02d:%02d" $2 ${1:-0})" ;;
         esac
     fi
     
-    if [ "$mode" = "install" ]; then
-        REPORT="📦 包安装结果\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n设备: $DEVICE_MODEL\n\n"
-        [ -n "$INSTALLED_LIST" ] && {
-            REPORT="${REPORT}✓ 成功 $(echo $INSTALLED_LIST|wc -w) 个:\n"
-            for p in $INSTALLED_LIST; do REPORT="${REPORT}√${p}\n"; done
-            REPORT="${REPORT}\n"
-        }
-        [ -n "$FAILED_LIST" ] && {
-            REPORT="${REPORT}✗ 失败 $(echo $FAILED_LIST|wc -w) 个:\n"
-            for p in $FAILED_LIST; do REPORT="${REPORT}✗${p}\n"; done
-        }
-    else
-        REPORT="脚本版本: $SCRIPT_VERSION\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n\n"
-        REPORT="${REPORT}官方源: ✓$OFFICIAL_UPDATED ○$OFFICIAL_SKIPPED ✗$OFFICIAL_FAILED"
-        [ -n "$UPDATED_PACKAGES" ] && REPORT="${REPORT}\n$(echo "$UPDATED_PACKAGES" | sed 's/^    - /√/')"
-        [ -n "$FAILED_PACKAGES" ] && REPORT="${REPORT}\n$(echo "$FAILED_PACKAGES" | sed 's/^    - /✗/')"
-        REPORT="${REPORT}\n第三方: ✓$THIRDPARTY_UPDATED ○$THIRDPARTY_SAME ✗$THIRDPARTY_FAILED\n"
-    fi
-    REPORT="${REPORT}⏰ 自动更新: $schedule\n"
-    REPORT="${REPORT}\n详细日志: $LOG_FILE"
+    REPORT="脚本版本: $SCRIPT_VERSION\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n\n"
+    
+    [ "$mode" != "install" ] && {
+        REPORT="${REPORT}官方源: ✓$OFFICIAL_UPDATED ○$OFFICIAL_SKIPPED ✗$OFFICIAL_FAILED${OFFICIAL_DETAIL}\n"
+    }
+    
+    REPORT="${REPORT}第三方: ✓$THIRDPARTY_UPDATED ○$THIRDPARTY_SAME ✗$THIRDPARTY_FAILED${THIRDPARTY_DETAIL}\n"
+    REPORT="${REPORT}⏰ 自动更新: $schedule\n\n详细日志: $LOG_FILE"
 }
 
 # update 模式
