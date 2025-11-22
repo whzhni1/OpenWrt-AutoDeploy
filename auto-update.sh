@@ -371,7 +371,7 @@ check_script_update() {
     local tmp="/tmp/auto-update-new.sh"
 
     for url in $SCRIPT_URLS; do
-        local update_url=$(echo "$url" | sed 's/auto-setup.conf$/auto-update.sh/')
+        local update_url=$(echo "$url" | sed 's/auto-setup$/auto-update.sh/')
 
         curl -fsSL -o "$tmp" "$update_url" 2>/dev/null || continue
         grep -q "run_update" "$tmp" || { rm -f "$tmp"; continue; }
