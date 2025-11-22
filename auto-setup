@@ -3,7 +3,7 @@
 START=99
 STOP=01
 
-DEFAULT_PACKAGES="luci-app-wechatpush luci-app-passwall2 luci-app-filemanager luci-i18n-package-manager-zh-cn luci-i18n-firewall-zh-cn vsftpd openssh-sftp-server luci-app-ttyd lucky tailscale luci-theme-aurora openlist2 luci-app-OpenClash"
+DEFAULT_PACKAGES="luci-app-wechatpush luci-app-filemanager luci-i18n-package-manager-zh-cn luci-i18n-firewall-zh-cn vsftpd openssh-sftp-server luci-app-ttyd lucky tailscale luci-theme-aurora openlist2 luci-app-openclash luci-app-passwall2"
 UPDATE_PATH="/usr/bin/auto-update.sh"
 LOG_FILE="/tmp/auto-setup-$$.log"
 
