@@ -8,7 +8,7 @@ UPDATE_PATH="/usr/bin/auto-update.sh"
 LOG_FILE="/tmp/auto-setup-$$.log"
 
 # 批量初始化变量
-for var in CRON_TIME INSTALL_PRIORITY GITEE_TOKEN GITCODE_TOKEN PACKAGES SCRIPT_URLS SYS_ARCH ARCH_FALLBACK PKG_TYPE PKG_EXT PKG_INSTALL PKG_UPDATE PKG_LIST_INSTALLED PKG_LIST PKG_INFO INSTALLED_PACKAGES PENDING_PACKAGES FAILED_PACKAGES THIRD_PARTY_INSTALLED UNINSTALLED_PACKAGES REMAINING_PACKAGES; do
+for var in CRON_TIME INSTALL_PRIORITY GITEE_TOKEN GITCODE_TOKEN SYS_ARCH ARCH_FALLBACK PKG_TYPE PKG_EXT PKG_INSTALL PKG_UPDATE PKG_LIST_INSTALLED PKG_LIST PKG_INFO INSTALLED_PACKAGES PENDING_PACKAGES FAILED_PACKAGES THIRD_PARTY_INSTALLED UNINSTALLED_PACKAGES REMAINING_PACKAGES; do
     eval "$var=''"
 done
 
@@ -37,7 +37,7 @@ read_fetch_config() {
     
     SCRIPT_URLS=$(sed -n '/^SCRIPT_URLS="/,/"$/p' "$script" | grep -v '^SCRIPT_URLS=' | grep -v '^"$')
 
-    log "✓ 配置读取完成"
+    log "√ 配置读取完成"
     log "  CRON_TIME: ${CRON_TIME:-未设置}"
     log "  INSTALL_PRIORITY: ${INSTALL_PRIORITY:-1}"
     log "  包数量: $(echo $PACKAGES | wc -w) 个"
@@ -57,7 +57,7 @@ GITCODE_TOKEN="${GITCODE_TOKEN}"
 SCRIPT_URLS="${SCRIPT_URLS}"
 EOF
     
-    [ -f "$conf" ] && log "✓ 配置已生成" || { log "✗ 配置生成失败"; return 1; }
+    [ -f "$conf" ] && log "√ 配置已生成" || { log "✗ 配置生成失败"; return 1; }
 }
 
 # 检测包管理器
@@ -85,7 +85,7 @@ detect_package_manager() {
         return 1
     fi
     
-    log "✓ 包管理器: $PKG_TYPE, 格式: $PKG_EXT"
+    log "√ 包管理器: $PKG_TYPE, 格式: $PKG_EXT"
 }
 
 # 架构变体映射
@@ -168,7 +168,7 @@ PKG_LIST="$PKG_LIST"
 PKG_INFO="$PKG_INFO"
 EOF
     
-    log "✓ 系统信息已保存"
+    log "√ 系统信息已保存"
 }
 
 # 检查已安装
@@ -194,7 +194,7 @@ install_lang() {
     is_installed "$lang" && return
     pkg_exists "$lang" || return
     
-    $PKG_INSTALL "$lang" >>"$LOG_FILE" 2>&1 && log "  ✓ $lang 安装成功"
+    $PKG_INSTALL "$lang" >>"$LOG_FILE" 2>&1 && log "√ $lang 安装成功"
 }
 
 # 安装单个包
@@ -205,7 +205,7 @@ install_pkg() {
     log "  安装 $pkg..."
     
     $PKG_INSTALL "$pkg" >>"$LOG_FILE" 2>&1 && {
-        log "  ✓ $pkg 安装成功"
+        log "√ $pkg 安装成功"
         INSTALLED_PACKAGES="$INSTALLED_PACKAGES $pkg"
         install_lang "$pkg"
         return 0
@@ -272,7 +272,7 @@ download_auto_update() {
         }
         
         chmod +x "$UPDATE_PATH"
-        log "✓ 下载成功 ($(wc -c < "$UPDATE_PATH" | tr -d ' ') 字节)"
+        log "√ 下载成功 ($(wc -c < "$UPDATE_PATH" | tr -d ' ') 字节)"
         return 0
     done
     
@@ -312,7 +312,6 @@ filter_uninstalled() {
 
 # 过滤第三方失败的包
 filter_third_party_failed() {
-    local list="$1"
     REMAINING_PACKAGES=""
     
     for pkg in $list; do
@@ -364,7 +363,7 @@ setup_crontab() {
     
     log "配置自动更新: $CRON_TIME"
     (crontab -l 2>/dev/null | grep -v "$UPDATE_PATH"; echo "$CRON_TIME $UPDATE_PATH") | crontab - && \
-        log "✓ 定时任务已添加" || log "✗ 定时任务添加失败"
+        log "√ 定时任务已添加" || log "✗ 定时任务添加失败"
 }
 
 # 删除安装脚本
@@ -384,7 +383,7 @@ remove_self() {
         [ -f "$f" ] && remain="$remain $f"
     done
     
-    [ -z "$remain" ] && log "✓ 脚本已删除" || { log "⚠ 残留: $remain"; return 1; }
+    [ -z "$remain" ] && log "√ 脚本已删除" || { log "⚠ 残留: $remain"; return 1; }
     
     echo " $INSTALLED_PACKAGES $THIRD_PARTY_INSTALLED " | grep -q " luci-proto-wireguard " && {
         log "检测到 luci-proto-wireguard，10秒后重启..."
@@ -405,12 +404,12 @@ run_setup() {
     init_arch
     save_system_info
     
-    $PKG_UPDATE >>"$LOG_FILE" 2>&1 && log "✓ 软件源已更新" || log "⚠ 软件源更新失败"
+    $PKG_UPDATE >>"$LOG_FILE" 2>&1 && log "√ 软件源已更新" || log "⚠ 软件源更新失败"
     
     run_install
     
     if [ -z "$FAILED_PACKAGES" ]; then
-        log "✓ 所有包安装成功"
+        log "√ 所有包安装成功"
         setup_crontab
         remove_self
     else
