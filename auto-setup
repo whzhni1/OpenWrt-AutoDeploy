@@ -324,20 +324,17 @@ filter_third_party_failed() {
 
 # 执行安装流程
 run_install() {
-    filter_uninstalled "$PACKAGES"
+    filter_uninstalled "$DEFAULT_PACKAGES"
     [ -z "$UNINSTALLED_PACKAGES" ] && { log "所有包已安装"; return; }
-    
+    log "需要安装的包: $UNINSTALLED_PACKAGES"
     if [ "${INSTALL_PRIORITY:-1}" = "1" ]; then
         log "策略: 官方源优先"
         install_official "$UNINSTALLED_PACKAGES"
-        
         [ -n "$PENDING_PACKAGES" ] && {
-            filter_uninstalled "$PENDING_PACKAGES"
-            [ -n "$UNINSTALLED_PACKAGES" ] && download_auto_update && call_third_party "$UNINSTALLED_PACKAGES"
+            download_auto_update && call_third_party "$PENDING_PACKAGES"
         }
     else
         log "策略: 第三方源优先"
-        
         if download_auto_update; then
             call_third_party "$UNINSTALLED_PACKAGES"
             filter_third_party_failed "$UNINSTALLED_PACKAGES"
@@ -347,7 +344,6 @@ run_install() {
             install_official "$UNINSTALLED_PACKAGES"
         fi
     fi
-    
     FAILED_PACKAGES="$PENDING_PACKAGES"
 }
 
