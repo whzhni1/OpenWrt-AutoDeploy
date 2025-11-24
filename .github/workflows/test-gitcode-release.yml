@@ -1,425 +1,160 @@
-name: 测试 Release 发布
+name: 测试 Release 脚本
 
 on:
   workflow_dispatch:
     inputs:
-      platform:
-        description: '测试平台'
+      test_mode:
+        description: '测试模式'
+        required: true
         type: choice
         options:
-          - 'All (Parallel)'
-          - 'GitCode'
-          - 'Gitee'
-          - 'GitLab'
-          - 'GitCode + Gitee'
-          - 'GitCode + GitLab'
-          - 'Gitee + GitLab'
-        default: 'All (Parallel)'
+          - '单个平台测试'
+          - '所有平台测试'
+        default: '单个平台测试'
+      
+      single_platform:
+        description: '单个平台选择 (仅单个平台测试时有效)'
+        required: false
+        type: choice
+        options:
+          - 'github'
+          - 'gitee'
+          - 'gitlab'
+        default: 'github'
       
       tag_name:
-        description: '版本标签'
+        description: 'Release 标签名'
+        required: true
         default: 'v1.0.0-test'
       
-      repo_name:
-        description: '仓库名称'
-        default: 'test-release'
+      release_title:
+        description: 'Release 标题'
+        required: true
+        default: '测试 Release'
+
+env:
+  # 平台配置
+  GITHUB_REPO: test-release
+  GITEE_REPO: test-release
+  GITLAB_REPO: test-release
+  
+  GITEE_USERNAME: your-gitee-username
+  GITLAB_USERNAME: your-gitlab-username
+  
+  BRANCH: main
 
 jobs:
-  # ========================================
-  # 测试版本管理器
-  # ========================================
-  test-version-manager:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: 测试 version-manager.sh
-        run: |
-          chmod +x .github/workflows/scripts/version-manager.sh
-          export VERSION_FILE="${RUNNER_TEMP}/test-version.txt"
-          
-          echo "1. 测试写入"
-          .github/workflows/scripts/version-manager.sh write openlist2 v4.1.7
-          cat $VERSION_FILE
-          
-          echo "2. 测试读取"
-          VERSION=$(.github/workflows/scripts/version-manager.sh read openlist2)
-          [ "$VERSION" = "v4.1.7" ] && echo "✅ 读取成功: $VERSION" || exit 1
-          
-          echo "3. 测试更新"
-          .github/workflows/scripts/version-manager.sh write openlist2 v4.1.8
-          VERSION=$(.github/workflows/scripts/version-manager.sh read openlist2)
-          [ "$VERSION" = "v4.1.8" ] && echo "✅ 更新成功: $VERSION" || exit 1
-          
-          echo "4. 测试多项目"
-          .github/workflows/scripts/version-manager.sh write tailscale v1.58.0
-          .github/workflows/scripts/version-manager.sh list
-          
-          echo "5. 测试检查"
-          .github/workflows/scripts/version-manager.sh check openlist2 && echo "✅ 存在检查通过"
-          ! .github/workflows/scripts/version-manager.sh check notexist && echo "✅ 不存在检查通过"
-          
-          echo "✅ version-manager.sh 测试完成"
-
-  # ========================================
-  # 准备测试文件
-  # ========================================
   prepare:
     runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.set-matrix.outputs.platforms }}
     steps:
-      - name: 生成测试文件
+      - name: 设置测试平台矩阵
+        id: set-matrix
         run: |
-          mkdir -p files
-          echo "# Test" > files/README.md
-          echo "${{ inputs.tag_name }}" > files/version.txt
-          echo "$(date)" > files/build-time.txt
-          ls -lh files/
+          if [ "${{ github.event.inputs.test_mode }}" = "单个平台测试" ]; then
+            echo "platforms=[\"${{ github.event.inputs.single_platform }}\"]" >> $GITHUB_OUTPUT
+          else
+            echo "platforms=[\"github\",\"gitee\",\"gitlab\"]" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 显示测试配置
+        run: |
+          echo "### 🧪 测试配置" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **测试模式**: ${{ github.event.inputs.test_mode }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.test_mode }}" = "单个平台测试" ]; then
+            echo "- **测试平台**: ${{ github.event.inputs.single_platform }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **测试平台**: GitHub, Gitee, GitLab" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- **标签名称**: ${{ github.event.inputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **标题**: ${{ github.event.inputs.release_title }}" >> $GITHUB_STEP_SUMMARY
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: test-files
-          path: files/
-          retention-days: 1
-
-  # ========================================
-  # 三平台并行发布测试
-  # ========================================
-  test-all-parallel:
-    runs-on: ubuntu-latest
+  test-release:
     needs: prepare
-    if: inputs.platform == 'All (Parallel)'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: ${{ fromJson(needs.prepare.outputs.platforms) }}
+      fail-fast: false
+    
+    name: 测试 ${{ matrix.platform }}
     
     steps:
-      - uses: actions/checkout@v4
+      - name: 检出代码
+        uses: actions/checkout@v4
       
-      - name: 配置脚本权限
+      - name: 创建测试文件
         run: |
-          chmod +x .github/workflows/scripts/release-GitCode.sh
-          chmod +x .github/workflows/scripts/release-gitee.sh
-          chmod +x .github/workflows/scripts/release-gitlab.sh
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: test-files
-          path: ${{ runner.temp }}/files
-
-      - name: 三平台并行发布
-        env:
-          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITCODE_USER: ${{ secrets.GITCODE_USERNAME || 'whzhni' }}
-          GITEE_USER: ${{ secrets.GITEE_USERNAME || 'whzhni' }}
-          GITLAB_USER: ${{ secrets.GITLAB_USERNAME || 'whzhni' }}
-        run: |
-          FILES=$(find ${{ runner.temp }}/files -type f | tr '\n' ' ')
-          START=$(date +%s)
-          
-          # GitCode 发布
-          (
-            GITCODE_TOKEN="$GITCODE_TOKEN" \
-            USERNAME="$GITCODE_USER" \
-            REPO_NAME="${{ inputs.repo_name }}" \
-            TAG_NAME="${{ inputs.tag_name }}" \
-            RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-            RELEASE_BODY="GitCode 三平台并行测试" \
-            UPLOAD_FILES="$FILES" \
-            RUNNER_TEMP="${{ runner.temp }}" \
-            .github/workflows/scripts/release-GitCode.sh
-          ) &
-          PID1=$!
-          
-          # Gitee 发布
-          (
-            GITEE_TOKEN="$GITEE_TOKEN" \
-            USERNAME="$GITEE_USER" \
-            REPO_NAME="${{ inputs.repo_name }}" \
-            TAG_NAME="${{ inputs.tag_name }}" \
-            RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-            RELEASE_BODY="Gitee 三平台并行测试" \
-            UPLOAD_FILES="$FILES" \
-            RUNNER_TEMP="${{ runner.temp }}" \
-            .github/workflows/scripts/release-gitee.sh
-          ) &
-          PID2=$!
-          
-          # GitLab 发布
-          (
-            GITLAB_TOKEN="$GITLAB_TOKEN" \
-            USERNAME="$GITLAB_USER" \
-            REPO_NAME="${{ inputs.repo_name }}" \
-            TAG_NAME="${{ inputs.tag_name }}" \
-            RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-            RELEASE_BODY="GitLab 三平台并行测试" \
-            UPLOAD_FILES="$FILES" \
-            RUNNER_TEMP="${{ runner.temp }}" \
-            .github/workflows/scripts/release-gitlab.sh
-          ) &
-          PID3=$!
-          
-          wait $PID1
-          STATUS1=$?
-          wait $PID2
-          STATUS2=$?
-          wait $PID3
-          STATUS3=$?
-          
-          ELAPSED=$(($(date +%s) - START))
-          
-          echo "总耗时: ${ELAPSED}s"
-          echo "GitCode: $([ $STATUS1 -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
-          echo "Gitee: $([ $STATUS2 -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
-          echo "GitLab: $([ $STATUS3 -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
-          
-          [ $STATUS1 -eq 0 ] && [ $STATUS2 -eq 0 ] && [ $STATUS3 -eq 0 ] || exit 1
-
-  # ========================================
-  # 双平台并行发布测试
-  # ========================================
-  test-dual-parallel:
-    runs-on: ubuntu-latest
-    needs: prepare
-    if: |
-      inputs.platform == 'GitCode + Gitee' || 
-      inputs.platform == 'GitCode + GitLab' || 
-      inputs.platform == 'Gitee + GitLab'
-    
-    steps:
-      - uses: actions/checkout@v4
+          echo "构建时间: $(date)" > build-time.txt
+          echo "版本: ${{ github.event.inputs.tag_name }}" > version.txt
+          echo "# 测试 Release 文件" > README.md
+          echo "此文件用于测试 Release 上传功能" >> README.md
       
-      - name: 配置脚本权限
-        run: |
-          chmod +x .github/workflows/scripts/release-GitCode.sh
-          chmod +x .github/workflows/scripts/release-gitee.sh
-          chmod +x .github/workflows/scripts/release-gitlab.sh
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: test-files
-          path: ${{ runner.temp }}/files
-
-      - name: 双平台并行发布
+      - name: 测试 GitHub Release
+        if: matrix.platform == 'github'
         env:
-          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITCODE_USER: ${{ secrets.GITCODE_USERNAME || 'whzhni' }}
-          GITEE_USER: ${{ secrets.GITEE_USERNAME || 'whzhni' }}
-          GITLAB_USER: ${{ secrets.GITLAB_USERNAME || 'whzhni' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USERNAME: ${{ github.repository_owner }}
+          REPO_NAME: ${{ env.GITHUB_REPO }}
+          TAG_NAME: ${{ github.event.inputs.tag_name }}
+          RELEASE_TITLE: ${{ github.event.inputs.release_title }}
+          RELEASE_BODY: "GitHub 测试"
+          UPLOAD_FILES: "build-time.txt version.txt README.md"
         run: |
-          FILES=$(find ${{ runner.temp }}/files -type f | tr '\n' ' ')
-          START=$(date +%s)
-          
-          # GitCode + Gitee
-          if [ "${{ inputs.platform }}" = "GitCode + Gitee" ]; then
-            (
-              GITCODE_TOKEN="$GITCODE_TOKEN" \
-              USERNAME="$GITCODE_USER" \
-              REPO_NAME="${{ inputs.repo_name }}" \
-              TAG_NAME="${{ inputs.tag_name }}" \
-              RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-              RELEASE_BODY="GitCode 双平台并行测试" \
-              UPLOAD_FILES="$FILES" \
-              RUNNER_TEMP="${{ runner.temp }}" \
-              .github/workflows/scripts/release-GitCode.sh
-            ) &
-            PID1=$!
-            
-            (
-              GITEE_TOKEN="$GITEE_TOKEN" \
-              USERNAME="$GITEE_USER" \
-              REPO_NAME="${{ inputs.repo_name }}" \
-              TAG_NAME="${{ inputs.tag_name }}" \
-              RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-              RELEASE_BODY="Gitee 双平台并行测试" \
-              UPLOAD_FILES="$FILES" \
-              RUNNER_TEMP="${{ runner.temp }}" \
-              .github/workflows/scripts/release-gitee.sh
-            ) &
-            PID2=$!
-          fi
-          
-          # GitCode + GitLab
-          if [ "${{ inputs.platform }}" = "GitCode + GitLab" ]; then
-            (
-              GITCODE_TOKEN="$GITCODE_TOKEN" \
-              USERNAME="$GITCODE_USER" \
-              REPO_NAME="${{ inputs.repo_name }}" \
-              TAG_NAME="${{ inputs.tag_name }}" \
-              RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-              RELEASE_BODY="GitCode 双平台并行测试" \
-              UPLOAD_FILES="$FILES" \
-              RUNNER_TEMP="${{ runner.temp }}" \
-              .github/workflows/scripts/release-GitCode.sh
-            ) &
-            PID1=$!
-            
-            (
-              GITLAB_TOKEN="$GITLAB_TOKEN" \
-              USERNAME="$GITLAB_USER" \
-              REPO_NAME="${{ inputs.repo_name }}" \
-              TAG_NAME="${{ inputs.tag_name }}" \
-              RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-              RELEASE_BODY="GitLab 双平台并行测试" \
-              UPLOAD_FILES="$FILES" \
-              RUNNER_TEMP="${{ runner.temp }}" \
-              .github/workflows/scripts/release-gitlab.sh
-            ) &
-            PID2=$!
-          fi
-          
-          # Gitee + GitLab
-          if [ "${{ inputs.platform }}" = "Gitee + GitLab" ]; then
-            (
-              GITEE_TOKEN="$GITEE_TOKEN" \
-              USERNAME="$GITEE_USER" \
-              REPO_NAME="${{ inputs.repo_name }}" \
-              TAG_NAME="${{ inputs.tag_name }}" \
-              RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-              RELEASE_BODY="Gitee 双平台并行测试" \
-              UPLOAD_FILES="$FILES" \
-              RUNNER_TEMP="${{ runner.temp }}" \
-              .github/workflows/scripts/release-gitee.sh
-            ) &
-            PID1=$!
-            
-            (
-              GITLAB_TOKEN="$GITLAB_TOKEN" \
-              USERNAME="$GITLAB_USER" \
-              REPO_NAME="${{ inputs.repo_name }}" \
-              TAG_NAME="${{ inputs.tag_name }}" \
-              RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-              RELEASE_BODY="GitLab 双平台并行测试" \
-              UPLOAD_FILES="$FILES" \
-              RUNNER_TEMP="${{ runner.temp }}" \
-              .github/workflows/scripts/release-gitlab.sh
-            ) &
-            PID2=$!
-          fi
-          
-          wait $PID1
-          STATUS1=$?
-          wait $PID2
-          STATUS2=$?
-          
-          ELAPSED=$(($(date +%s) - START))
-          
-          echo "总耗时: ${ELAPSED}s"
-          echo "平台1: $([ $STATUS1 -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
-          echo "平台2: $([ $STATUS2 -eq 0 ] && echo '✅ 成功' || echo '❌ 失败')"
-          
-          [ $STATUS1 -eq 0 ] && [ $STATUS2 -eq 0 ] || exit 1
-
-  # ========================================
-  # 单平台发布测试
-  # ========================================
-  test-single:
-    runs-on: ubuntu-latest
-    needs: prepare
-    if: |
-      inputs.platform == 'GitCode' || 
-      inputs.platform == 'Gitee' || 
-      inputs.platform == 'GitLab'
-    
-    steps:
-      - uses: actions/checkout@v4
+          chmod +x release-github.sh
+          ./release-github.sh
       
-      - name: 配置脚本权限
-        run: |
-          chmod +x .github/workflows/scripts/release-GitCode.sh
-          chmod +x .github/workflows/scripts/release-gitee.sh
-          chmod +x .github/workflows/scripts/release-gitlab.sh
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: test-files
-          path: ${{ runner.temp }}/files
-
-      - name: 发布到 ${{ inputs.platform }}
+      - name: 测试 Gitee Release
+        if: matrix.platform == 'gitee'
         env:
-          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          USERNAME: ${{ env.GITEE_USERNAME }}
+          REPO_NAME: ${{ env.GITEE_REPO }}
+          TAG_NAME: ${{ github.event.inputs.tag_name }}
+          RELEASE_TITLE: ${{ github.event.inputs.release_title }}
+          RELEASE_BODY: "Gitee 测试"
+          UPLOAD_FILES: "build-time.txt version.txt README.md"
         run: |
-          FILES=$(find ${{ runner.temp }}/files -type f | tr '\n' ' ')
-          
-          if [ "${{ inputs.platform }}" = "GitCode" ]; then
-            GITCODE_TOKEN="$GITCODE_TOKEN" \
-            USERNAME="${{ secrets.GITCODE_USERNAME || 'whzhni' }}" \
-            REPO_NAME="${{ inputs.repo_name }}" \
-            TAG_NAME="${{ inputs.tag_name }}" \
-            RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-            RELEASE_BODY="GitCode 单平台测试" \
-            UPLOAD_FILES="$FILES" \
-            RUNNER_TEMP="${{ runner.temp }}" \
-            .github/workflows/scripts/release-GitCode.sh
-            
-          elif [ "${{ inputs.platform }}" = "Gitee" ]; then
-            GITEE_TOKEN="$GITEE_TOKEN" \
-            USERNAME="${{ secrets.GITEE_USERNAME || 'whzhni' }}" \
-            REPO_NAME="${{ inputs.repo_name }}" \
-            TAG_NAME="${{ inputs.tag_name }}" \
-            RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-            RELEASE_BODY="Gitee 单平台测试" \
-            UPLOAD_FILES="$FILES" \
-            RUNNER_TEMP="${{ runner.temp }}" \
-            .github/workflows/scripts/release-gitee.sh
-            
-          elif [ "${{ inputs.platform }}" = "GitLab" ]; then
-            GITLAB_TOKEN="$GITLAB_TOKEN" \
-            USERNAME="${{ secrets.GITLAB_USERNAME || 'whzhni' }}" \
-            REPO_NAME="${{ inputs.repo_name }}" \
-            TAG_NAME="${{ inputs.tag_name }}" \
-            RELEASE_TITLE="测试 ${{ inputs.tag_name }}" \
-            RELEASE_BODY="GitLab 单平台测试" \
-            UPLOAD_FILES="$FILES" \
-            RUNNER_TEMP="${{ runner.temp }}" \
-            .github/workflows/scripts/release-gitlab.sh
-          fi
-          
-          echo "✅ ${{ inputs.platform }} 发布完成"
+          chmod +x release-gitee.sh
+          ./release-gitee.sh
+      
+      - name: 测试 GitLab Release
+        if: matrix.platform == 'gitlab'
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          USERNAME: ${{ env.GITLAB_USERNAME }}
+          REPO_NAME: ${{ env.GITLAB_REPO }}
+          TAG_NAME: ${{ github.event.inputs.tag_name }}
+          RELEASE_TITLE: ${{ github.event.inputs.release_title }}
+          RELEASE_BODY: "GitLab 测试"
+          UPLOAD_FILES: "build-time.txt version.txt README.md"
+        run: |
+          chmod +x release-gitlab.sh
+          ./release-gitlab.sh
 
-  # ========================================
-  # 测试报告
-  # ========================================
-  report:
+  summary:
+    needs: [prepare, test-release]
     runs-on: ubuntu-latest
-    needs: [test-version-manager, test-all-parallel, test-dual-parallel, test-single]
     if: always()
-    
     steps:
       - name: 生成测试报告
         run: |
-          cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## 🧪 测试报告
+          echo "# 📊 测试结果汇总" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 测试配置" >> $GITHUB_STEP_SUMMARY
+          echo "- **模式**: ${{ github.event.inputs.test_mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **标签**: ${{ github.event.inputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 平台状态" >> $GITHUB_STEP_SUMMARY
           
-          **测试平台**: ${{ inputs.platform }}  
-          **版本标签**: ${{ inputs.tag_name }}  
-          **仓库名称**: ${{ inputs.repo_name }}
+          platforms='${{ needs.prepare.outputs.platforms }}'
+          echo "测试平台: $platforms" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          | 测试项 | 结果 |
-          |--------|------|
-          | 版本管理器 | ${{ needs.test-version-manager.result == 'success' && '✅ 成功' || '❌ 失败' }} |
-          | 三平台并行 | ${{ needs.test-all-parallel.result == 'success' && '✅ 成功' || (needs.test-all-parallel.result == 'skipped' && '⏭️ 跳过' || '❌ 失败') }} |
-          | 双平台并行 | ${{ needs.test-dual-parallel.result == 'success' && '✅ 成功' || (needs.test-dual-parallel.result == 'skipped' && '⏭️ 跳过' || '❌ 失败') }} |
-          | 单平台发布 | ${{ needs.test-single.result == 'success' && '✅ 成功' || (needs.test-single.result == 'skipped' && '⏭️ 跳过' || '❌ 失败') }} |
-          
-          ---
-          
-          ### 📋 需要配置的 Secrets
-          
-          - \`GITCODE_TOKEN\` - GitCode 访问令牌
-          - \`GITEE_TOKEN\` - Gitee 访问令牌  
-          - \`GITLAB_TOKEN\` - GitLab 访问令牌
-          - \`GITCODE_USERNAME\` - GitCode 用户名 (可选，默认: whzhni)
-          - \`GITEE_USERNAME\` - Gitee 用户名 (可选，默认: whzhni)
-          - \`GITLAB_USERNAME\` - GitLab 用户名 (可选，默认: whzhni)
-          
-          ### 🔗 仓库链接
-          
-          - [GitCode](https://gitcode.com/\${{ secrets.GITCODE_USERNAME || 'whzhni' }}/${{ inputs.repo_name }})
-          - [Gitee](https://gitee.com/\${{ secrets.GITEE_USERNAME || 'whzhni' }}/${{ inputs.repo_name }})
-          - [GitLab](https://gitlab.com/\${{ secrets.GITLAB_USERNAME || 'whzhni' }}/${{ inputs.repo_name }})
-          EOF
-          
-          echo "::notice::测试完成，详情请查看 Summary"
+          if [ "${{ needs.test-release.result }}" = "success" ]; then
+            echo "✅ 所有平台测试通过" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ 部分平台测试失败，请查看详细日志" >> $GITHUB_STEP_SUMMARY
+          fi
