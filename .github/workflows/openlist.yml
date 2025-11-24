@@ -26,39 +26,29 @@ jobs:
           PROJECTS='[{"github_owner":"sbwml","github_repo":"luci-app-openlist2","local_name":"openlist2"}]'
           UPDATES='[]'
           
-          echo "$PROJECTS" | jq -c '.[]' | while read -r proj; do
+          while read -r proj; do
             owner=$(echo "$proj" | jq -r '.github_owner')
             repo=$(echo "$proj" | jq -r '.github_repo')
             name=$(echo "$proj" | jq -r '.local_name')
             
-            # 获取上游版本
+            # 获取版本
             latest=$(curl -s "https://api.github.com/repos/$owner/$repo/tags" | jq -r '.[0].name // empty')
             [ -z "$latest" ] && { echo "⚠️  $name: 无上游版本"; continue; }
             
-            # 获取本地版本
             local=$(.github/workflows/scripts/version-manager.sh read "$name" 2>/dev/null || echo "")
             
-            # 判断是否需要构建
-            needs_build=false
-            if [ -z "$local" ]; then
-              echo "✅ $name: 新项目 ($latest)"
-              needs_build=true
-            elif [ "$local" != "$latest" ] || [ "${{ inputs.force_build }}" = "true" ]; then
-              echo "✅ $name: $local → $latest"
-              needs_build=true
-            else
-              echo "ℹ️  $name: 已是最新 ($latest)"
-            fi
-            
-            # 添加到构建列表
-            if [ "$needs_build" = "true" ]; then
+            # 判断是否构建
+            if [ -z "$local" ] || [ "$local" != "$latest" ] || [ "${{ inputs.force_build }}" = "true" ]; then
+              echo "✅ $name: ${local:-新项目} → $latest"
               UPDATES=$(echo "$UPDATES" | jq -c \
                 --arg o "$owner" --arg r "$repo" --arg n "$name" --arg v "$latest" \
                 '. += [{github_owner:$o, github_repo:$r, local_name:$n, version:$v}]')
+            else
+              echo "ℹ️  $name: 已是最新 ($latest)"
             fi
-          done
+          done < <(echo "$PROJECTS" | jq -c '.[]')
           
-          # 输出结果
+          # 输出
           if [ "$UPDATES" = "[]" ]; then
             echo "has_updates=false" >> $GITHUB_OUTPUT
             echo "value={\"include\":[]}" >> $GITHUB_OUTPUT
@@ -66,7 +56,6 @@ jobs:
           else
             echo "has_updates=true" >> $GITHUB_OUTPUT
             echo "value={\"include\":$UPDATES}" >> $GITHUB_OUTPUT
-            echo "构建列表: $(echo "$UPDATES" | jq -r '.[] | "  \(.local_name) (\(.version))"')"
           fi
 
   build:
