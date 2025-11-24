@@ -179,24 +179,39 @@ jobs:
           echo "📦 准备发布 $(echo $FILES | wc -w) 个文件"
           
           declare -A PIDS RESULTS
-          for platform in gitcode gitee gitlab; do
-            token="${platform^^}_TOKEN"
-            user="${platform^^}_USERNAME"
-            [ -z "${!token}" ] && { echo "⚠️  跳过 $platform"; continue; }
-            
-            (${platform^^}_TOKEN="${!token}" USERNAME="${!user}" \
-              .github/workflows/scripts/release-${platform}.sh && \
-              echo "0" > /tmp/${platform}.status || echo "1" > /tmp/${platform}.status) &
-            PIDS[$platform]=$!
-          done
           
+          # GitCode
+          [ -n "$GITCODE_TOKEN" ] && {
+            (GITCODE_TOKEN="$GITCODE_TOKEN" USERNAME="$GITCODE_USERNAME" \
+              .github/workflows/scripts/release-gitcode.sh && \
+              echo "0" > /tmp/gitcode.status || echo "1" > /tmp/gitcode.status) &
+            PIDS[gitcode]=$!
+          }
+          
+          # Gitee
+          [ -n "$GITEE_TOKEN" ] && {
+            (GITEE_TOKEN="$GITEE_TOKEN" USERNAME="$GITEE_USERNAME" \
+              .github/workflows/scripts/release-gitee.sh && \
+              echo "0" > /tmp/gitee.status || echo "1" > /tmp/gitee.status) &
+            PIDS[gitee]=$!
+          }
+          
+          # GitLab
+          [ -n "$GITLAB_TOKEN" ] && {
+            (GITLAB_TOKEN="$GITLAB_TOKEN" USERNAME="$GITLAB_USERNAME" \
+              .github/workflows/scripts/release-gitlab.sh && \
+              echo "0" > /tmp/gitlab.status || echo "1" > /tmp/gitlab.status) &
+            PIDS[gitlab]=$!
+          }
+          
+          # 等待所有平台完成
           for platform in "${!PIDS[@]}"; do
             wait ${PIDS[$platform]}
             status=$(cat /tmp/${platform}.status 2>/dev/null || echo "1")
             RESULTS[$platform]=$status
             echo "$platform: $([ "$status" = "0" ] && echo '✅' || echo '❌')"
           done
-          
+
           for status in "${RESULTS[@]}"; do
             [ "$status" = "0" ] && exit 0
           done
