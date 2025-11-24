@@ -95,8 +95,15 @@ EOF
 
 cleanup_tags() {
     log "步骤 2/4: 清理旧标签"
+    
+    local current=$(api GET "/projects/$PROJECT_ID/releases/$TAG_NAME")
+    if echo "$current" | jq -e '.tag_name' >/dev/null 2>&1; then
+        warn "Release 已存在 ($TAG_NAME)，跳过发布"
+        return 2
+    fi
+    
     local tags=$(api GET "/projects/$PROJECT_ID/repository/tags" | jq -r '.[].name // empty')
-    [ -z "$tags" ] && { log "无需清理"; return; }
+    [ -z "$tags" ] && { log "无需清理"; return 0; }
     
     local count=0
     while IFS= read -r tag; do
@@ -105,16 +112,12 @@ cleanup_tags() {
         
         warn "清理: $tag"
         local code=$(api DELETE "/projects/$PROJECT_ID/repository/tags/$(urlencode "$tag")")
-        if [ "$code" = "204" ] || [ "$code" = "200" ]; then
-            success "  已删除"
-            count=$((count + 1))
-        else
-            warn "  删除失败"
-        fi
+        [ "$code" = "204" ] || [ "$code" = "200" ] && count=$((count + 1))
         sleep 0.5
     done <<< "$tags"
     
     [ $count -gt 0 ] && success "已清理 $count 个旧版本" || log "无需清理"
+    return 0
 }
 
 upload_files() {
@@ -209,6 +212,10 @@ main() {
     check_env
     ensure_repo && is_public=0 || is_public=1
     cleanup_tags
+    if [ $? -eq 2 ]; then
+        echo "Release: ${GITLAB_URL}/${REPO_PATH}/-/releases/${TAG_NAME}" >&2
+        exit 0
+    fi
     upload_files
     create_release
     [ $is_public -ne 0 ] && set_public
