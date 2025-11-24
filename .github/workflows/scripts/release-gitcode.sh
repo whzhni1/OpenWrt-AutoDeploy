@@ -117,8 +117,15 @@ EOF
 
 cleanup_tags() {
     log "步骤 2/4: 清理旧标签"
+    
+    local current=$(api GET "/repos/$REPO_PATH/releases/tags/$TAG_NAME")
+    if echo "$current" | grep -q "\"tag_name\":\"$TAG_NAME\""; then
+        warn "Release 已存在 ($TAG_NAME)，跳过发布"
+        return 2
+    fi
+    
     local tags=$(api GET "/repos/$REPO_PATH/tags" | jq -r '.[].name // empty' 2>/dev/null)
-    [ -z "$tags" ] && { log "无需清理"; return; }
+    [ -z "$tags" ] && { log "无需清理"; return 0; }
     
     local count=0
     while IFS= read -r tag; do
@@ -132,6 +139,7 @@ cleanup_tags() {
     done <<< "$tags"
     
     [ $count -gt 0 ] && success "已清理 $count 个旧版本" || log "无需清理"
+    return 0
 }
 
 create_release() {
@@ -229,6 +237,10 @@ main() {
     check_env
     ensure_repo
     cleanup_tags
+    if [ $? -eq 2 ]; then
+        echo "Release: https://gitcode.com/$REPO_PATH/releases" >&2
+        exit 0
+    fi
     create_release
     upload_files
     verify_release
