@@ -3,24 +3,16 @@ name: 测试 Release 脚本
 on:
   workflow_dispatch:
     inputs:
-      test_mode:
-        description: '测试模式'
+      platform:
+        description: '测试平台'
         required: true
         type: choice
         options:
-          - '单个平台测试'
-          - '所有平台测试'
-        default: '单个平台测试'
-      
-      single_platform:
-        description: '单个平台选择 (仅单个平台测试时有效)'
-        required: false
-        type: choice
-        options:
+          - 'all'
           - 'gitcode'
           - 'gitee'
           - 'gitlab'
-        default: 'gitcode'
+        default: 'all'
       
       tag_name:
         description: 'Release 标签名'
@@ -31,6 +23,12 @@ on:
         description: 'Release 标题'
         required: true
         default: '测试 Release'
+      
+      enable_version_write:
+        description: '写入版本到 version-manager.sh'
+        required: true
+        type: boolean
+        default: false
 
 env:
   # 平台配置
@@ -53,24 +51,24 @@ jobs:
       - name: 设置测试平台矩阵
         id: set-matrix
         run: |
-          if [ "${{ github.event.inputs.test_mode }}" = "单个平台测试" ]; then
-            echo "platforms=[\"${{ github.event.inputs.single_platform }}\"]" >> $GITHUB_OUTPUT
-          else
+          if [ "${{ github.event.inputs.platform }}" = "all" ]; then
             echo "platforms=[\"gitcode\",\"gitee\",\"gitlab\"]" >> $GITHUB_OUTPUT
+          else
+            echo "platforms=[\"${{ github.event.inputs.platform }}\"]" >> $GITHUB_OUTPUT
           fi
       
       - name: 显示测试配置
         run: |
           echo "### 🧪 测试配置" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **测试模式**: ${{ github.event.inputs.test_mode }}" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ github.event.inputs.test_mode }}" = "单个平台测试" ]; then
-            echo "- **测试平台**: ${{ github.event.inputs.single_platform }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.platform }}" = "all" ]; then
+            echo "- **测试平台**: GitCode, Gitee, GitLab (全部)" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- **测试平台**: GitCode, Gitee, GitLab" >> $GITHUB_STEP_SUMMARY
+            echo "- **测试平台**: ${{ github.event.inputs.platform }}" >> $GITHUB_STEP_SUMMARY
           fi
           echo "- **标签名称**: ${{ github.event.inputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **标题**: ${{ github.event.inputs.release_title }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release 标题**: ${{ github.event.inputs.release_title }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **版本写入**: ${{ github.event.inputs.enable_version_write }}" >> $GITHUB_STEP_SUMMARY
 
   test-release:
     needs: prepare
@@ -93,6 +91,17 @@ jobs:
           echo "# 测试 Release 文件" > README.md
           echo "此文件用于测试 Release 上传功能" >> README.md
       
+      - name: 写入版本信息
+        if: github.event.inputs.enable_version_write == 'true'
+        run: |
+          if [ -f "version-manager.sh" ]; then
+            chmod +x version-manager.sh
+            ./version-manager.sh set "${{ github.event.inputs.tag_name }}"
+            echo "✅ 已写入版本: ${{ github.event.inputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ version-manager.sh 不存在" >> $GITHUB_STEP_SUMMARY
+          fi
+      
       - name: 测试 GitCode Release
         if: matrix.platform == 'gitcode'
         env:
@@ -101,11 +110,11 @@ jobs:
           REPO_NAME: ${{ env.GITCODE_REPO }}
           TAG_NAME: ${{ github.event.inputs.tag_name }}
           RELEASE_TITLE: ${{ github.event.inputs.release_title }}
-          RELEASE_BODY: "GitCode 测试"
+          RELEASE_BODY: "GitCode 单平台测试"
           UPLOAD_FILES: "build-time.txt version.txt README.md"
         run: |
-          chmod +x release-gitcode.sh
-          ./release-gitcode.sh
+          chmod +x .github/workflows/scripts/release-gitcode.sh
+          ./.github/workflows/scripts/release-gitcode.sh
       
       - name: 测试 Gitee Release
         if: matrix.platform == 'gitee'
@@ -115,11 +124,11 @@ jobs:
           REPO_NAME: ${{ env.GITEE_REPO }}
           TAG_NAME: ${{ github.event.inputs.tag_name }}
           RELEASE_TITLE: ${{ github.event.inputs.release_title }}
-          RELEASE_BODY: "Gitee 测试"
+          RELEASE_BODY: "Gitee 单平台测试"
           UPLOAD_FILES: "build-time.txt version.txt README.md"
         run: |
-          chmod +x release-gitee.sh
-          ./release-gitee.sh
+          chmod +x .github/workflows/scripts/release-gitee.sh
+          ./.github/workflows/scripts/release-gitee.sh
       
       - name: 测试 GitLab Release
         if: matrix.platform == 'gitlab'
@@ -129,11 +138,11 @@ jobs:
           REPO_NAME: ${{ env.GITLAB_REPO }}
           TAG_NAME: ${{ github.event.inputs.tag_name }}
           RELEASE_TITLE: ${{ github.event.inputs.release_title }}
-          RELEASE_BODY: "GitLab 测试"
+          RELEASE_BODY: "GitLab 单平台测试"
           UPLOAD_FILES: "build-time.txt version.txt README.md"
         run: |
-          chmod +x release-gitlab.sh
-          ./release-gitlab.sh
+          chmod +x .github/workflows/scripts/release-gitlab.sh
+          ./.github/workflows/scripts/release-gitlab.sh
 
   summary:
     needs: [prepare, test-release]
@@ -145,14 +154,11 @@ jobs:
           echo "# 📊 测试结果汇总" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 测试配置" >> $GITHUB_STEP_SUMMARY
-          echo "- **模式**: ${{ github.event.inputs.test_mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **平台**: ${{ github.event.inputs.platform }}" >> $GITHUB_STEP_SUMMARY
           echo "- **标签**: ${{ github.event.inputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **版本写入**: ${{ github.event.inputs.enable_version_write }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 平台状态" >> $GITHUB_STEP_SUMMARY
-          
-          platforms='${{ needs.prepare.outputs.platforms }}'
-          echo "测试平台: $platforms" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 执行状态" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ needs.test-release.result }}" = "success" ]; then
             echo "✅ 所有平台测试通过" >> $GITHUB_STEP_SUMMARY
