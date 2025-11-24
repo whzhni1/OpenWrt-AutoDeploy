@@ -31,13 +31,11 @@ jobs:
             repo=$(echo "$proj" | jq -r '.github_repo')
             name=$(echo "$proj" | jq -r '.local_name')
             
-            # 获取版本
             latest=$(curl -s "https://api.github.com/repos/$owner/$repo/tags" | jq -r '.[0].name // empty')
             [ -z "$latest" ] && { echo "⚠️  $name: 无上游版本"; continue; }
             
             local=$(.github/workflows/scripts/version-manager.sh read "$name" 2>/dev/null || echo "")
             
-            # 判断是否构建
             if [ -z "$local" ] || [ "$local" != "$latest" ] || [ "${{ inputs.force_build }}" = "true" ]; then
               echo "✅ $name: ${local:-新项目} → $latest"
               UPDATES=$(echo "$UPDATES" | jq -c \
@@ -48,7 +46,6 @@ jobs:
             fi
           done < <(echo "$PROJECTS" | jq -c '.[]')
           
-          # 输出
           if [ "$UPDATES" = "[]" ]; then
             echo "has_updates=false" >> $GITHUB_OUTPUT
             echo "value={\"include\":[]}" >> $GITHUB_OUTPUT
@@ -68,21 +65,7 @@ jobs:
       fail-fast: false
       matrix:
         project: ${{ fromJson(needs.check-updates.outputs.matrix).include }}
-        arch:
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - aarch64_cortex-a76
-          - aarch64_generic
-          - arm_cortex-a15_neon-vfpv4
-          - arm_cortex-a5_vfpv4
-          - arm_cortex-a7
-          - arm_cortex-a7_neon-vfpv4
-          - arm_cortex-a7_vfpv4
-          - arm_cortex-a8_vfpv3
-          - arm_cortex-a9
-          - arm_cortex-a9_neon
-          - arm_cortex-a9_vfpv3-d16
-          - x86_64
+        arch: [aarch64_cortex-a53, aarch64_cortex-a72, aarch64_cortex-a76, aarch64_generic, arm_cortex-a15_neon-vfpv4, arm_cortex-a5_vfpv4, arm_cortex-a7, arm_cortex-a7_neon-vfpv4, arm_cortex-a7_vfpv4, arm_cortex-a8_vfpv3, arm_cortex-a9, arm_cortex-a9_neon, arm_cortex-a9_vfpv3-d16, x86_64]
         sdk: [openwrt-24.10, SNAPSHOT]
 
     steps:
@@ -95,16 +78,9 @@ jobs:
       - name: 配置构建
         run: |
           [ ! -f "openlist2/Makefile" ] && exit 0
-          
-          # 静态链接
           sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' openlist2/Makefile
-          
-          # UPX 压缩（排除特定架构）
-          if [[ "${{ matrix.arch }}" != loongarch64* ]] && \
-             [[ "${{ matrix.arch }}" != mips64* ]] && \
-             [[ "${{ matrix.arch }}" != riscv64* ]]; then
+          [[ "${{ matrix.arch }}" != loongarch64* && "${{ matrix.arch }}" != mips64* && "${{ matrix.arch }}" != riscv64* ]] && \
             sed -i '/openlist2.init/a \\t/usr/bin/upx --lzma --best $(1)\/usr\/bin\/openlist2' openlist2/Makefile
-          fi
 
       - name: 构建软件包
         uses: sbwml/openwrt-gh-action-sdk@go1.25
@@ -117,7 +93,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.project.local_name }}-${{ matrix.arch }}-${{ matrix.sdk }}
-          path: bin/packages/**/packages_ci/*.{apk,ipk}
+          path: |
+            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+            bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
           retention-days: 1
           if-no-files-found: warn
 
@@ -138,9 +116,7 @@ jobs:
           fetch-depth: 0
 
       - name: 配置脚本
-        run: |
-          chmod +x .github/workflows/scripts/release-*.sh
-          chmod +x .github/workflows/scripts/version-manager.sh
+        run: chmod +x .github/workflows/scripts/{release-*.sh,version-manager.sh}
 
       - uses: actions/download-artifact@v4
         with:
@@ -153,18 +129,17 @@ jobs:
           RELEASE_DIR="${{ runner.temp }}/release"
           mkdir -p "$RELEASE_DIR"
           
-          # 整理 IPK/APK 文件
           find "${{ runner.temp }}/artifacts" -name "${{ matrix.project.local_name }}-*" -type d | while read -r dir; do
             arch=$(basename "$dir" | sed 's/^${{ matrix.project.local_name }}-//' | sed 's/-\(openwrt-24.10\|SNAPSHOT\)$//')
             
-            # IPK 文件（_all.ipk 去重）
+            # IPK (_all.ipk 去重)
             find "$dir" -name "*.ipk" | while read -r f; do
               name=$(basename "$f")
               [[ "$name" == *_all.ipk ]] && [ -f "$RELEASE_DIR/$name" ] && continue
               cp "$f" "$RELEASE_DIR/"
             done
             
-            # APK 文件（luci-* 通用，其他加架构后缀）
+            # APK (luci-* 通用，其他加架构)
             find "$dir" -name "*.apk" | while read -r f; do
               name=$(basename "$f")
               if [[ "$name" == luci-* ]]; then
@@ -175,8 +150,8 @@ jobs:
             done
           done
           
-          echo "文件统计: $(find "$RELEASE_DIR" -type f | wc -l) 个"
           echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
+          echo "文件统计: $(find "$RELEASE_DIR" -type f 2>/dev/null | wc -l) 个"
 
       - name: 并行发布
         env:
@@ -191,72 +166,50 @@ jobs:
           RELEASE_TITLE: "${{ matrix.project.local_name }} ${{ matrix.project.version }}"
           RELEASE_DIR: ${{ env.RELEASE_DIR }}
         run: |
-          # 收集所有文件
-          FILES=$(find "$RELEASE_DIR" -type f \( -name '*.ipk' -o -name '*.apk' \) | tr '\n' ' ')
+          FILES=$(find "$RELEASE_DIR" -type f \( -name '*.ipk' -o -name '*.apk' \) 2>/dev/null | tr '\n' ' ')
           export UPLOAD_FILES="$FILES"
-          
-          # 设置 Release 描述
           export RELEASE_BODY="## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }}
 
           ### 📌 项目信息
           - 上游仓库: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
           - 构建时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S') (北京时间)
           - SDK 版本: OpenWrt 24.10 + SNAPSHOT"
-          
           export RUNNER_TEMP="${{ runner.temp }}"
           
           echo "📦 准备发布 $(echo $FILES | wc -w) 个文件"
           
-          # 并行发布
           declare -A PIDS RESULTS
-          
           for platform in gitcode gitee gitlab; do
-            TOKEN_VAR="${platform^^}_TOKEN"
-            USER_VAR="${platform^^}_USERNAME"
+            token="${platform^^}_TOKEN"
+            user="${platform^^}_USERNAME"
+            [ -z "${!token}" ] && { echo "⚠️  跳过 $platform"; continue; }
             
-            [ -z "${!TOKEN_VAR}" ] && { echo "⚠️  跳过 $platform (无 Token)"; continue; }
-            
-            (
-              ${platform^^}_TOKEN="${!TOKEN_VAR}" \
-              USERNAME="${!USER_VAR}" \
+            (${platform^^}_TOKEN="${!token}" USERNAME="${!user}" \
               .github/workflows/scripts/release-${platform}.sh && \
-              echo "0" > /tmp/${platform}.status || echo "1" > /tmp/${platform}.status
-            ) &
+              echo "0" > /tmp/${platform}.status || echo "1" > /tmp/${platform}.status) &
             PIDS[$platform]=$!
           done
           
-          # 等待并检查结果
           for platform in "${!PIDS[@]}"; do
             wait ${PIDS[$platform]}
             status=$(cat /tmp/${platform}.status 2>/dev/null || echo "1")
             RESULTS[$platform]=$status
-            echo "$platform: $([ "$status" = "0" ] && echo '✅ 成功' || echo '❌ 失败')"
+            echo "$platform: $([ "$status" = "0" ] && echo '✅' || echo '❌')"
           done
           
-          # 至少一个成功即可
           for status in "${RESULTS[@]}"; do
             [ "$status" = "0" ] && exit 0
           done
-          
-          echo "::error::所有平台都发布失败"
-          exit 1
+          echo "::error::所有平台都发布失败"; exit 1
 
       - name: 更新版本记录
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          .github/workflows/scripts/version-manager.sh write \
-            "${{ matrix.project.local_name }}" \
-            "${{ matrix.project.version }}"
-          
+          .github/workflows/scripts/version-manager.sh write "${{ matrix.project.local_name }}" "${{ matrix.project.version }}"
           git add version.txt
-          
-          if git diff --cached --quiet; then
-            echo "ℹ️  无变化"
-          else
+          git diff --cached --quiet || {
             git commit -m "📝 ${{ matrix.project.local_name }} → ${{ matrix.project.version }}"
             git pull --rebase origin ${{ github.ref_name }} || git push --force-with-lease
             git push origin ${{ github.ref_name }}
-            echo "✅ 已更新"
-          fi
+          }
