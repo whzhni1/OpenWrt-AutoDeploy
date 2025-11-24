@@ -140,18 +140,26 @@ upload_files() {
         local code=$(echo "$resp" | tail -n1)
         
         if [ "$code" = "201" ]; then
-            success "上传成功"
             local dl_url="${API_BASE}/projects/$PROJECT_ID/packages/generic/$PACKAGE_NAME/$TAG_NAME/$name"
+    
             ASSETS_LINKS=$(echo "$ASSETS_LINKS" | jq --arg n "$name" --arg u "$dl_url" \
-                '. += [{name:$n, url:$u, link_type:"package"}]')
+                '. += [{name:$n, url:$u, link_type:"package"}]' 2>/dev/null) || {
+                err "添加文件链接失败"
+                ((failed++))
+                continue
+            }
+            
+            success "上传成功"
             ((uploaded++))
         else
-            error "上传失败 (HTTP $code)"
+            err "上传失败 (HTTP $code)"
             ((failed++))
         fi
     done
     
-    [ $uploaded -eq ${#files[@]} ] && success "全部上传成功: $uploaded/${#files[@]}" || warn "部分成功: $uploaded/${#files[@]}"
+    echo "" >&2
+    [ $uploaded -eq ${#files[@]} ] && success "全部上传成功: $uploaded/${#files[@]}" || \
+        warn "上传完成: 成功 $uploaded, 失败 $failed"
 }
 
 # 创建 Release
