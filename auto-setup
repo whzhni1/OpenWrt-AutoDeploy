@@ -22,23 +22,15 @@ log() {
 # 读取引导配置
 read_fetch_config() {
     local script="/etc/init.d/auto-setup-fetch"
-    [ ! -f "$script" ] && { log "⚠ 引导脚本不存在，使用默认配置"; return 1; }
+    [ ! -f "$script" ] && { log "⚠ 引导脚本不存在"; return 1; }
     
-    log "读取引导配置..."
+    eval "$(grep -E '^(CRON_TIME|INSTALL_PRIORITY|PACKAGES|AUTHORS)=' "$script" | sed 's/#.*//')"
     
-    CRON_TIME=$(sed -n 's/^CRON_TIME="\([^"]*\)"/\1/p' "$script" | head -1)
-    INSTALL_PRIORITY=$(sed -n 's/^INSTALL_PRIORITY="\([^"]*\)"/\1/p' "$script" | head -1)
+    SCRIPT_URLS=$(awk '/^SCRIPT_URLS="/{f=1;next} /^"/{f=0} f && /^http/' "$script")
     
-    local pkg=$(sed -n 's/^PACKAGES="\([^"]*\)"/\1/p' "$script" | head -1)
-    PACKAGES=$([ -n "$pkg" ] && echo "$pkg" || echo "$DEFAULT_PACKAGES")
-    [ -z "$pkg" ] && log "  使用默认包列表"
+    [ -z "$PACKAGES" ] && PACKAGES="$DEFAULT_PACKAGES"
     
-    SCRIPT_URLS=$(sed -n '/^SCRIPT_URLS="/,/"$/p' "$script" | grep -v '^SCRIPT_URLS=' | grep -v '^"$')
-
-    log "✓ 配置读取完成"
-    log "  CRON_TIME: ${CRON_TIME:-未设置}"
-    log "  INSTALL_PRIORITY: ${INSTALL_PRIORITY:-1}"
-    log "  包数量: $(echo $PACKAGES | wc -w) 个"
+    log "✓ 配置: CRON=${CRON_TIME:-未设置} AUTHORS=${AUTHORS:-自动} URLs=$(echo "$SCRIPT_URLS" | wc -l)个"
 }
 
 # 生成配置文件
@@ -47,9 +39,9 @@ generate_config() {
     log "生成配置: $conf"
     
     cat > "$conf" <<EOF
-
 CRON_TIME="${CRON_TIME}"
 INSTALL_PRIORITY="${INSTALL_PRIORITY:-1}"
+AUTHORS="${AUTHORS}"
 SCRIPT_URLS="${SCRIPT_URLS}"
 EOF
     
