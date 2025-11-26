@@ -29,9 +29,8 @@ read_fetch_config() {
     SCRIPT_URLS=$(source "$script" >/dev/null 2>&1; echo "$SCRIPT_URLS")
 
     [ -z "$PACKAGES" ] && PACKAGES="$DEFAULT_PACKAGES"
-    [ -z "$INSTALL_PRIORITY" ] && INSTALL_PRIORITY="1"
     
-    log "✓ 配置: CRON=${CRON_TIME:-未设置} INSTALL_PRIORITY=${INSTALL_PRIORITY} AUTHORS=${AUTHORS:-自动} URL=$(echo "$SCRIPT_URLS" | wc -w)个"
+    log "🔍 识别配置: 自动更新：${CRON_TIME:-关} 安装策略：$([ "$INSTALL_PRIORITY" = "1" ] && echo "三方优先" || echo "官方优先") 作者：${AUTHORS:-自动} URL=$(echo "$SCRIPT_URLS" | wc -w)个"
 }
 
 # 检测包管理器
@@ -127,7 +126,6 @@ init_arch() {
 # 保存配置
 save_all_config() {
     local conf="/etc/auto-setup.conf"
-    log "保存配置: $conf"
     
     cat > "$conf" <<EOF
 # 用户配置
@@ -357,7 +355,11 @@ remove_self() {
     for f in $files; do
         [ -f "$f" ] || [ -L "$f" ] && rm -f "$f" && log "  删除: $f"
     done
-    
+    if [ -z "$CRON_TIME" ]; then
+        log "未设置自动更新，清理所有相关文件"
+        rm -f "$UPDATE_PATH" && log "  删除: $UPDATE_PATH"
+        rm -f "/etc/auto-setup.conf" && log "  删除: 配置文件"
+
     sleep 2
     
     local remain=""
@@ -394,8 +396,7 @@ run_setup() {
     else
         log "⚠ 安装失败: $FAILED_PACKAGES"
         log "保留脚本等待重试"
-    fi
-    
+    fi  
     log "配置完成，日志: $LOG_FILE"
 }
 
