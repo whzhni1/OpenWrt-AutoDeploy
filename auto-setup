@@ -374,7 +374,7 @@ remove_self() {
         sleep 10
         reboot
     }
-｝
+}
 
 # 主安装流程
 run_setup() {
