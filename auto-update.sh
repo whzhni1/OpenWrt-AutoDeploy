@@ -436,7 +436,7 @@ run_update() {
     [ "$INSTALL_PRIORITY" = "1" ] && {
         update_thirdparty
         update_official
-    else
+    } || {
         update_official
         update_thirdparty
     }
