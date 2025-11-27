@@ -35,13 +35,13 @@
 ## 配置说明 ⚙️
 |参数名 |	属性 |  用法     |	作用  |  说明
 |------|--------|-----------|----------|--------|
-|INSTALL_PRIORITY|可选	|INSTALL_PRIORITY="1"	|设置安装策略	|1=第三方源优先，其他值或空值=官方源优先
-|PACKAGES| 可选	|PACKAGES="luci-app-ttyd tailscale"|	自定义安装插件列表|	多个插件用空格分隔，不设置则使用默认列表
-|CRON_TIME| 可选	|CRON_TIME="0 4 * * *"	|设置自动更新定时任务|	标准 crontab 格式，不设置则禁用自动更新
-|PUSH_TOKEN| 可选	|PUSH_TOKEN="你的TOKEN"|	安装或更新时推送通知	|支持 ServerChan Turbo、PushPlus、ServerChan 令牌
-|AUTHORS| 可选	|AUTHORS="自定义作者"	|设置插件作者项目	|从指定作者的项目仓库下载插件
-|EXCLUDE_PACKAGES| 可选	|EXCLUDE_PACKAGES="abc def"|	设置排除更新列表|多个包名用空格分隔，不参与自动更新
-|SCRIPT_URLS	| 必需 |URL	|脚本下载源	|支持 GitHub、GitLab、Gitee、GitCode 等，支持带访问令牌， https://xxx≈访问令牌
+|INSTALL_PRIORITY|可选	|INSTALL_PRIORITY="1"	|设置安装策略	|1=第三方源优先，其他值或空值=官方源优先|
+|PACKAGES| 可选	|PACKAGES="luci-app-ttyd tailscale"|	自定义安装插件列表|	多个插件用空格分隔，不设置则使用默认列表|
+|CRON_TIME| 可选	|CRON_TIME="0 4 * * *"	|设置自动更新定时任务|	标准 crontab 格式，不设置则禁用自动更新|
+|PUSH_TOKEN| 可选	|PUSH_TOKEN="你的TOKEN"|	安装或更新时推送通知	|支持 ServerChan Turbo、PushPlus、ServerChan 令牌|
+|AUTHORS| 可选	|AUTHORS="自定义作者"	|设置插件作者项目	|从指定作者的项目仓库下载插件|
+|EXCLUDE_PACKAGES| 可选	|EXCLUDE_PACKAGES="abc def"|	设置排除更新列表|多个包名用空格分隔，不参与自动更新|
+|SCRIPT_URLS	| 必需 |URL	|脚本下载源	|支持 GitHub、GitLab、Gitee、GitCode 等，支持带访问令牌， https://xxx≈访问令牌|
  
   ---
 ### 1. 基础使用
@@ -123,13 +123,15 @@ echo "[$(date '+%F %T')] ✓ 已启动"
 插件仓库 🗃️
 项目自动维护以下插件的多平台分发：
 
-插件名称	描述	更新频率
-luci-theme-aurora	极光主题	每日
-luci-app-filemanager	文件管理	每日
-luci-app-openclash	Clash 客户端	每日
-luci-app-passwall2	代理工具	每日
-tailscale	组网工具	每日
-lucky	内网穿透	每日
+|插件|名称	|描述	|更新频率|
+|---------------|------|-------|
+|luci-theme-aurora	|极光主题|	每日|
+|luci-app-openclash|	Clash 客户端	|每日|
+|luci-app-passwall2	|代理工具	|每日|
+|tailscale	|组网工具	|每日|
+|lucky	|内网穿透|	每日|
+
+---
 
 致谢 🙏
 感谢所有插件的开发者
