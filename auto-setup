@@ -26,11 +26,11 @@ read_fetch_config() {
     
     eval "$(grep -E '^(CRON_TIME|INSTALL_PRIORITY|PACKAGES|AUTHORS|PUSH_TOKEN|EXCLUDE_PACKAGES)=' "$script" 2>/dev/null | sed 's/#.*//')"
     
-    SCRIPT_URLS=$(source "$script" >/dev/null 2>&1; echo "$SCRIPT_URLS")
+    SCRIPT_URLS=$(. "$script" >/dev/null 2>&1; echo "$SCRIPT_URLS")
 
     [ -z "$PACKAGES" ] && PACKAGES="$DEFAULT_PACKAGES"
     
-    log "🔍 识别配置: 自动更新：${CRON_TIME:-关} 安装策略：$([ "$INSTALL_PRIORITY" = "1" ] && echo "三方优先" || echo "官方优先") 作者：${AUTHORS:-自动} 推送：${PUSH_TOKEN:+开} URL=$(echo "$SCRIPT_URLS" | wc -w)个 排除：${EXCLUDE_PACKAGES:+已设置}"
+    log "🔍 识别配置: ${CRON_TIME:+定时:$CRON_TIME }${AUTHORS:+作者:$AUTHORS }${PUSH_TOKEN:+推送:开 }${EXCLUDE_PACKAGES:+排除:有 }URLs:$(echo $SCRIPT_URLS|wc -w)个"
 }
 
 # 检测包管理器
@@ -129,12 +129,12 @@ save_all_config() {
     
     cat > "$conf" <<EOF
 # 用户配置
-CRON_TIME="${CRON_TIME}"
-INSTALL_PRIORITY="${INSTALL_PRIORITY}"
-AUTHORS="${AUTHORS}"
-SCRIPT_URLS="${SCRIPT_URLS}"
-PUSH_TOKEN="${PUSH_TOKEN}"
-EXCLUDE_PACKAGES="${EXCLUDE_PACKAGES}"
+CRON_TIME="${CRON_TIME:-}"
+INSTALL_PRIORITY="${INSTALL_PRIORITY:-}"
+AUTHORS="${AUTHORS:-}"
+PUSH_TOKEN="${PUSH_TOKEN:-}"
+EXCLUDE_PACKAGES="${EXCLUDE_PACKAGES:-}"
+SCRIPT_URLS="${SCRIPT_URLS:-}"
 
 # 系统信息（自动检测）
 SYS_ARCH="$SYS_ARCH"
