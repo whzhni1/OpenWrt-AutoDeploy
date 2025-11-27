@@ -30,7 +30,7 @@ load_config() {
 
     [ -z "$SYS_ARCH" ] || [ -z "$PKG_INSTALL" ] || [ -z "$PKG_UPDATE" ] || \
     [ -z "$PKG_LIST_INSTALLED" ] || [ -z "$SCRIPT_URLS" ] && { log "✗ 缺少必需配置"; return 1; }
-    
+    [ -n "$EXCLUDE_PACKAGES" ] && EXCLUDE_PACKAGES="$EXCLUDE_PACKAGES $EXCLUDE_PACKAGES"
     log "√ 配置已加载"
 }
 
