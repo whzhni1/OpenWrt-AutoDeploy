@@ -275,11 +275,11 @@ call_third_party() {
 
 # 过滤未安装的包
 filter_uninstalled() {
-    local list="$1"
+    local list="$1" verbose="$2"
     UNINSTALLED_PACKAGES=""
     local skip=0
     
-    log "过滤未安装的包..."
+    [ "$verbose" = "1" ] && log "检查已安装状态..."
     
     for pkg in $list; do
         [ -z "$pkg" ] && continue
@@ -287,26 +287,30 @@ filter_uninstalled() {
     done
     
     UNINSTALLED_PACKAGES=$(echo "$UNINSTALLED_PACKAGES" | xargs)
-    [ $skip -gt 0 ] && log "已跳过 $skip 个已安装包"
-    [ -n "$UNINSTALLED_PACKAGES" ] && log "需要安装: $(echo $UNINSTALLED_PACKAGES | wc -w) 个"
+    
+    [ "$verbose" = "1" ] && {
+        [ $skip -gt 0 ] && log "已跳过 $skip 个已安装包"
+        [ -n "$UNINSTALLED_PACKAGES" ] && log "待安装: $(echo $UNINSTALLED_PACKAGES | wc -w) 个"
+    }
 }
 
 # 执行安装流程
 run_install() {
-    filter_uninstalled "$PACKAGES"
+    filter_uninstalled "$PACKAGES" 1
     [ -z "$UNINSTALLED_PACKAGES" ] && { log "所有包已安装"; return; }
     
     local need="$UNINSTALLED_PACKAGES"
-    log "需要安装: $need (策略: $([ "$INSTALL_PRIORITY" = "1" ] && echo 第三方优先 || echo 官方优先))"
+    log "需要安装: $need (策略: $([ "$INSTALL_PRIORITY" = "1" ] && echo "第三方优先" || echo "官方优先"))"
     
-    [ "$INSTALL_PRIORITY" = "1" ] && {
+    if [ "$INSTALL_PRIORITY" = "1" ]; then
         download_auto_update && call_third_party "$need"
         filter_uninstalled "$need"
         [ -n "$UNINSTALLED_PACKAGES" ] && install_official "$UNINSTALLED_PACKAGES"
-    } || {
+    else
         install_official "$need"
-        [ -n "$PENDING_PACKAGES" ] && download_auto_update && call_third_party "$PENDING_PACKAGES"
-    }
+        filter_uninstalled "$need"
+        [ -n "$UNINSTALLED_PACKAGES" ] && download_auto_update && call_third_party "$UNINSTALLED_PACKAGES"
+    fi
     
     filter_uninstalled "$need"
     FAILED_PACKAGES="$UNINSTALLED_PACKAGES"
