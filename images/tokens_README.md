@@ -1,5 +1,3 @@
-
-cat > TOKEN_SETUP_GUIDE.md <<'EOF'
 # 各平台令牌创建步骤指南
 
 ## Gitee (码云) 令牌创建步骤
