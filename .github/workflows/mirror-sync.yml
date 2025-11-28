@@ -30,7 +30,7 @@ jobs:
           # 永远不同步的（目录或文件）
           NEVER_SYNC='^\.github/'
           # 不触发但会跟随同步的文件
-          NO_TRIGGER='^(version\.txt|README\.md)$'
+          NO_TRIGGER='^(version\.txt|README\.md|images/)'
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             FILES=$(find . -maxdepth 1 -type f ! -name '.*' -printf '%f ')
