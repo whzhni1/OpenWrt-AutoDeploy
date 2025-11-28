@@ -34,11 +34,11 @@
 
 ## 快速开始 🚀
 ```bash
-FETC="/etc/init.d/auto-setup-fetch"; curl -fsSL "https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup-fetch" -o "$FETC" && chmod +x "$FETC" && "$FETC" enable && "$FETC" start
+curl -fsSL "https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup-fetch" | sh
 ```
 或
 ```bash
-FETC="/etc/init.d/auto-setup-fetch"; wget -q -O "$FETC" "https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup-fetch" && chmod +x "$FETC" && "$FETC" enable && "$FETC" start
+wget -q -O "$FETC" "https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup-fetch" | sh
 ```
 ## ⚠️ 提示：
 1. 体验完成自动清理无须手动清理
