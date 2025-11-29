@@ -54,8 +54,8 @@ wget -q -O - "https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup
 |SCRIPT_URLS	| 必需 |SCRIPT_URLS="URL1"|脚本下载源	|支持 GitHub、GitLab、Gitee、GitCode 等，支持带访问令牌， URL≈访问令牌|
 ---
 ### 使用实例.:
-在 OpenWrt 构建页面的「自定义固件」→「首次启动脚本」中添加[auto-setup-fetch](https://raw.githubusercontent.com/whzhni1/OpenWrt-AutoDeploy/refs/heads/main/auto-setup-fetch)中的代码如图所示：
-![教程](https://github.com/whzhni1/OpenWrt-AutoDeploy/blob/8128ded337fec1fa49ddb504206b73212eb12a73/images/%E6%95%99%E7%A8%8B.png)
+在 OpenWrt 构建页面的「自定义固件」→「首次启动脚本」中添加[auto-setup-fetch](https://raw.githubusercontent.com/whzhni1/OpenWrt-AutoDeploy/refs/heads/main/auto-setup-fetch)![项目Logo](./auto-setup-fetch)中的代码如图所示：
+![教程](./images/%E6%95%99%E7%A8%8B.png)
 
 ## 插件仓库 🗃️
 ## 项目自动维护以下插件的多平台分发：
