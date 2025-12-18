@@ -3,8 +3,8 @@
 
 set -e
 
-PLATFORM="${1:-$PLATFORM}"
-PLATFORMS="${PLATFORMS:-$PLATFORM}"
+PLATFORMS="${PLATFORMS:-${1:-$PLATFORM}}"
+PLATFORM="$PLATFORMS"
 
 # 如果是多个平台，循环处理
 if echo "$PLATFORMS" | grep -q ' '; then
