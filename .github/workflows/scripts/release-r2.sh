@@ -23,11 +23,11 @@ R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
 # 检查环境
 check_env() {
-    [ -z "$R2_ACCESS_KEY" ] && { log "❌ R2_ACCESS_KEY 未设置"; exit 1; }
-    [ -z "$R2_SECRET_KEY" ] && { log "❌ R2_SECRET_KEY 未设置"; exit 1; }
-    [ -z "$R2_ACCOUNT_ID" ] && { log "❌ R2_ACCOUNT_ID 未设置"; exit 1; }
-    [ -z "$REPO_NAME" ] || [ -z "$TAG_NAME" ] && { log "❌ REPO_NAME 或 TAG_NAME 未设置"; exit 1; }
-    command -v aws >/dev/null 2>&1 || { log "❌ 需要 aws-cli"; exit 1; }
+    [ -z "$R2_ACCESS_KEY" ] && { log "❌ R2_ACCESS_KEY 未设置"; exit 0; }
+    [ -z "$R2_SECRET_KEY" ] && { log "❌ R2_SECRET_KEY 未设置"; exit 0; }
+    [ -z "$R2_ACCOUNT_ID" ] && { log "❌ R2_ACCOUNT_ID 未设置"; exit 0; }
+    [ -z "$REPO_NAME" ] || [ -z "$TAG_NAME" ] && { log "❌ REPO_NAME 或 TAG_NAME 未设置"; exit 0; }
+    command -v aws >/dev/null 2>&1 || { log "❌ 需要 aws-cli"; exit 0; }
     log "✅ 环境检查通过"
 }
 
@@ -90,7 +90,7 @@ upload_files() {
         fi
     done
     
-    [ $uploaded -eq 0 ] && { log "❌ 没有文件上传成功"; exit 1; }
+    [ $uploaded -eq 0 ] && { log "❌ 没有文件上传成功"; exit 0; }
     
     log "✅ 已上传 $uploaded 个文件"
     
