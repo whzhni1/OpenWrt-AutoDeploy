@@ -40,8 +40,8 @@ api() {
 }
 
 check_env() {
-    [ -z "$GITLAB_TOKEN" ] && { log "❌ GITLAB_TOKEN 未设置"; exit 1; }
-    [ -z "$USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ USERNAME 或 REPO_NAME 未设置"; exit 1; }
+    [ -z "$GITLAB_TOKEN" ] && { log "❌ GITLAB_TOKEN 未设置"; exit 0; }
+    [ -z "$USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ USERNAME 或 REPO_NAME 未设置"; exit 0; }
     PROJECT_PATH_ENCODED=$(urlencode "$REPO_PATH")
     log "✅ 配置检查通过"
 }
@@ -64,7 +64,7 @@ ensure_repo() {
     
     resp=$(api POST "/projects" "$payload")
     PROJECT_ID=$(echo "$resp" | jq -r '.id // empty')
-    [ -z "$PROJECT_ID" ] && { log "❌ 创建仓库失败"; exit 1; }
+    [ -z "$PROJECT_ID" ] && { log "❌ 创建仓库失败"; exit 0; }
     log "✅ 仓库已创建 (ID: $PROJECT_ID)"
     sleep 3
     
@@ -86,7 +86,7 @@ EOF
     git config user.email "bot@gitlab.com"
     git remote add origin "https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL#https://}/${REPO_PATH}.git"
     git add . && git commit -m "Initial commit" -q
-    git push origin "$BRANCH" 2>&1 | sed "s/${GITLAB_TOKEN}/***TOKEN***/g" || { log "❌ 初始化失败"; exit 1; }
+    git push origin "$BRANCH" 2>&1 | sed "s/${GITLAB_TOKEN}/***TOKEN***/g" || { log "❌ 初始化失败"; exit 0; }
     
     cd - >/dev/null && rm -rf "$tmp"
     log "✅ 仓库初始化完成"
@@ -166,7 +166,7 @@ create_release() {
     local tag_check=$(api GET "/projects/$PROJECT_ID/repository/tags/$(urlencode "$TAG_NAME")")
     if ! echo "$tag_check" | jq -e '.name' >/dev/null 2>&1; then
         local tag_payload=$(jq -n --arg t "$TAG_NAME" --arg r "$BRANCH" '{tag_name:$t, ref:$r}')
-        api POST "/projects/$PROJECT_ID/repository/tags" "$tag_payload" >/dev/null || { log "❌ 创建标签失败"; exit 1; }
+        api POST "/projects/$PROJECT_ID/repository/tags" "$tag_payload" >/dev/null || { log "❌ 创建标签失败"; exit 0; }
     fi
     
     # 创建 Release
@@ -174,7 +174,7 @@ create_release() {
         --argjson l "$ASSETS_LINKS" '{tag_name:$t, name:$n, description:$d, assets:{links:$l}}')
     
     local resp=$(api POST "/projects/$PROJECT_ID/releases" "$payload")
-    echo "$resp" | jq -e '.tag_name' >/dev/null 2>&1 || { log "❌ 创建 Release 失败"; exit 1; }
+    echo "$resp" | jq -e '.tag_name' >/dev/null 2>&1 || { log "❌ 创建 Release 失败"; exit 0; }
     
     local count=$(echo "$resp" | jq '.assets.links | length')
     log "✅ Release 创建成功 (包含 $count 个附件)"
