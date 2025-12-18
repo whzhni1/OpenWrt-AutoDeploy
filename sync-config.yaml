@@ -1,0 +1,37 @@
+# 上游同步配置
+# 每个项目的配置说明：
+# - github_owner: GitHub 用户名/组织名（必填）
+# - github_repo: GitHub 仓库名（必填）
+# - local_name: 本地仓库名称（选填，默认使用 github_repo）
+# - platforms: 发布平台，空格分隔（选填，默认：gitcode gitee gitlab r2）
+#   可选值：gitcode, gitee, gitlab, r2
+# - filter_exclude: 排除文件规则，空格分隔（选填）
+# - filter_include: 包含文件规则，格式：pattern:数量（选填）
+# - filter_by_version: 是否只保留版本号匹配的文件（选填，默认 false）
+
+repositories:
+  - github_owner: vernesong
+    github_repo: OpenClash
+    local_name: luci-app-openclash
+    platforms: r2
+
+  - github_owner: whzhni1
+    github_repo: luci-app-tailscale
+    local_name: tailscale
+
+  - github_owner: whzhni1
+    github_repo: luci-app-lucky
+    local_name: lucky
+
+  - github_owner: eamonxg
+    github_repo: luci-theme-aurora
+
+  - github_owner: xiaorouji
+    github_repo: openwrt-passwall
+    local_name: luci-app-passwall
+    filter_exclude: luci-19.07* *.zip
+
+  - github_owner: xiaorouji
+    github_repo: openwrt-passwall2
+    local_name: luci-app-passwall2
+    filter_exclude: luci-19.07* *.zip
