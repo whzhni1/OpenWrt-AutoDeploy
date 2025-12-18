@@ -18,7 +18,7 @@ API_BASE="https://api.gitcode.com/api/v5"
 REPO_PATH="${USERNAME}/${REPO_NAME}"
 
 # 日志
-log() { echo "🅒🅞🅓🅔 $*" >&2; }
+log() { echo "🅲🅾🅳🅴 $*" >&2; }
 
 # API 调用
 api() {
