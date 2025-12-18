@@ -21,7 +21,7 @@ on:
           - 'gitcode'
           - 'gitee'
           - 'gitlab'
-          - 'Cloudflare R2'
+          - 'r2'
         default: 'all'
       
       USERNAME:
@@ -63,6 +63,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: 配置脚本权限
+        run: chmod +x .github/workflows/scripts/*.sh
+      
       - name: 创建测试文件
         if: github.event.inputs.action == '创建Release'
         run: |
@@ -73,25 +76,18 @@ jobs:
       
       - name: 写入版本信息
         if: github.event.inputs.action == '创建Release' && github.event.inputs.enable_version_write == 'true'
-        run: |
-          chmod +x .github/workflows/scripts/version-manager.sh
-          .github/workflows/scripts/version-manager.sh set "${{ env.TAG_NAME }}"
+        run: .github/workflows/scripts/version-manager.sh set "${{ env.TAG_NAME }}"
       
       - name: 创建 Release
         if: github.event.inputs.action == '创建Release'
         env:
-          # 平台选择
           PLATFORMS: ${{ github.event.inputs.platform == 'all' && 'gitcode gitee gitlab r2' || github.event.inputs.platform }}
-          
-          # Tokens
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
-          
-          # Release 信息
           RELEASE_BODY: "## 🧪 测试 Release\n\n平台: ${{ github.event.inputs.platform }}"
           UPLOAD_FILES: "build-time.txt version.txt README.md"
           BRANCH: main
@@ -107,9 +103,7 @@ jobs:
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
           PLATFORMS: ${{ github.event.inputs.platform == 'all' && 'gitcode gitee gitlab r2' || github.event.inputs.platform }}
-        run: |
-         chmod +x .github/workflows/scripts/delete-repo.sh
-         .github/workflows/scripts/delete-repo.sh
+        run: .github/workflows/scripts/delete-repo.sh
       
       - name: 生成报告
         if: always()
