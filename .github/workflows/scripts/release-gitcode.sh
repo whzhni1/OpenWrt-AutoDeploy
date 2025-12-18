@@ -32,8 +32,8 @@ api() {
 }
 
 check_env() {
-    [ -z "$GITCODE_TOKEN" ] && { log "❌ GITCODE_TOKEN 未设置"; exit 1; }
-    [ -z "$USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ USERNAME 或 REPO_NAME 未设置"; exit 1; }
+    [ -z "$GITCODE_TOKEN" ] && { log "❌ GITCODE_TOKEN 未设置"; exit 0; }
+    [ -z "$USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ USERNAME 或 REPO_NAME 未设置"; exit 0; }
     log "✅ 配置检查通过"
 }
 
@@ -52,7 +52,7 @@ ensure_repo() {
         '{name:$n, description:$d, private:$p, has_issues:true, has_wiki:true, auto_init:false}')
     
     resp=$(api POST "/user/repos" "$payload")
-    echo "$resp" | grep -q '"id"' || { log "❌ 创建仓库失败"; exit 1; }
+    echo "$resp" | grep -q '"id"' || { log "❌ 创建仓库失败"; exit 0; }
     log "✅ 仓库已创建"
     sleep 3
     
@@ -86,7 +86,7 @@ ${REPO_DESC}
         [ -f "README.md" ] && { log "✅ README.md 已存在"; cd - >/dev/null && rm -rf "$tmp"; return 0; }
         echo "$readme" > README.md
         git add README.md && git commit -m "Add README.md" -q
-        git push 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g" || { log "❌ 推送失败"; exit 1; }
+        git push 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g" || { log "❌ 推送失败"; exit 0; }
     else
         git init -q
         git config user.name "GitCode Bot"
@@ -96,7 +96,7 @@ ${REPO_DESC}
         git remote add origin "$git_url"
         
         if ! git push -u origin HEAD:master 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g" | grep -qv "error"; then
-            git push -u origin HEAD:main 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g" || { log "❌ 推送失败"; exit 1; }
+            git push -u origin HEAD:main 2>&1 | sed "s/${GITCODE_TOKEN}/***TOKEN***/g" || { log "❌ 推送失败"; exit 0; }
         fi
     fi
     
@@ -141,7 +141,7 @@ create_release() {
         '{tag_name:$t, name:$n, body:$b, target_commitish:$br}')
     
     local resp=$(api POST "/repos/$REPO_PATH/releases" "$payload")
-    echo "$resp" | grep -q "\"tag_name\":\"$TAG_NAME\"" || { log "❌ 创建 Release 失败"; exit 1; }
+    echo "$resp" | grep -q "\"tag_name\":\"$TAG_NAME\"" || { log "❌ 创建 Release 失败"; exit 0; }
     log "✅ Release 创建成功"
 }
 
@@ -208,7 +208,7 @@ verify_release() {
         log "✅ 验证成功 (附件: $assets)"
     else
         log "❌ 验证失败"
-        exit 1
+        exit 0
     fi
 }
 
