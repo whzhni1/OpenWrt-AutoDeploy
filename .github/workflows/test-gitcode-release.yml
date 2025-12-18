@@ -107,7 +107,9 @@ jobs:
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
           PLATFORMS: ${{ github.event.inputs.platform == 'all' && 'gitcode gitee gitlab r2' || github.event.inputs.platform }}
-        run: .github/workflows/scripts/delete-repo.sh
+        run: |
+         chmod +x .github/workflows/scripts/delete-repo.sh
+         .github/workflows/scripts/delete-repo.sh
       
       - name: 生成报告
         if: always()
