@@ -4,7 +4,7 @@ set -e
 
 # 环境变量
 GITEE_TOKEN="${GITEE_TOKEN:-}"
-USERNAME="${USERNAME:-}"
+GITEE_USERNAME="${GITEE_USERNAME:-}"
 REPO_NAME="${REPO_NAME:-}"
 REPO_DESC="${REPO_DESC:-Gitee Release Repository}"
 REPO_PRIVATE="${REPO_PRIVATE:-false}"
@@ -15,7 +15,7 @@ BRANCH="${BRANCH:-main}"
 UPLOAD_FILES="${UPLOAD_FILES:-}"
 
 API_BASE="https://gitee.com/api/v5"
-REPO_PATH="${USERNAME}/${REPO_NAME}"
+REPO_PATH="${GITEE_USERNAME}/${REPO_NAME}"
 RELEASE_ID=""
 
 # 日志
@@ -36,7 +36,7 @@ api() {
 
 check_env() {
     [ -z "$GITEE_TOKEN" ] && { log "❌ GITEE_TOKEN 未设置"; exit 1; }
-    [ -z "$USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ USERNAME 或 REPO_NAME 未设置"; exit 1; }
+    [ -z "$GITEE_USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ GITEE_USERNAME 或 REPO_NAME 未设置"; exit 1; }
     log "✅ 配置检查通过"
 }
 
