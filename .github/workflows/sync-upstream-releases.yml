@@ -23,8 +23,10 @@ jobs:
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
+          
           matrix=$(yq eval '.repositories' sync-config.yaml -o=json -I=0)
           echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
+          
           echo "📋 读取到 $(echo $matrix | jq '. | length') 个仓库配置"
           echo "$matrix" | jq -r '.[] | "  - \(.github_owner)/\(.github_repo)"'
 
@@ -39,9 +41,6 @@ jobs:
       
     steps:
       - uses: actions/checkout@v4
-      
-      - name: 配置脚本
-        run: chmod +x .github/workflows/scripts/{release-*.sh,version-manager.sh}
       
       - name: 检查更新
         id: check
@@ -75,8 +74,8 @@ jobs:
           echo "$release" > /tmp/release.json
           [[ "$tag" =~ ^v ]] && version="$tag" || version="v$tag"
           
-          # 检查是否需要更新
-          local=$(.github/workflows/scripts/version-manager.sh read "$local_name" 2>/dev/null || echo "")
+          # ✅ 使用 bash 执行脚本
+          local=$(bash .github/workflows/scripts/version-manager.sh read "$local_name" 2>/dev/null || echo "")
           
           if [ -z "$local" ] || [ "$local" != "$version" ] || [ "${{ inputs.force_sync }}" = "true" ]; then
             echo "needs_update=true" >> $GITHUB_OUTPUT
@@ -142,7 +141,6 @@ jobs:
       - name: 并行发布
         if: steps.check.outputs.needs_update == 'true'
         env:
-          # 平台选择
           PLATFORMS: ${{ matrix.platforms || 'gitcode gitee gitlab r2' }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -151,12 +149,12 @@ jobs:
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
           
-          # 基础信息
           REPO_NAME: ${{ steps.check.outputs.local_name }}
           TAG_NAME: ${{ steps.check.outputs.version }}
           DOWNLOAD_DIR: ${{ env.DOWNLOAD_DIR }}
           GITHUB_REPO_URL: "https://github.com/${{ matrix.github_owner }}/${{ matrix.github_repo }}"
-        run: .github/workflows/scripts/release.sh
+        # ✅ 使用 bash 执行
+        run: bash .github/workflows/scripts/release.sh
       
       - name: 保存版本信息
         if: env.release_success == 'true'
@@ -202,9 +200,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: 配置脚本
-        run: chmod +x .github/workflows/scripts/version-manager.sh
-      
       - uses: actions/download-artifact@v4
         with:
           pattern: version-*
@@ -223,7 +218,8 @@ jobs:
             [ -f "$file" ] || continue
             IFS='|' read -r name version < "$file"
             [ -n "$name" ] && [ -n "$version" ] && {
-              .github/workflows/scripts/version-manager.sh write "$name" "$version"
+              # ✅ 使用 bash 执行
+              bash .github/workflows/scripts/version-manager.sh write "$name" "$version"
               echo "  ✓ $name → $version"
               updated=$((updated + 1))
             }
