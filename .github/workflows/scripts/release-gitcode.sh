@@ -4,7 +4,7 @@ set -e
 
 # 环境变量
 GITCODE_TOKEN="${GITCODE_TOKEN:-}"
-GITCODE_USERNAME="${GITCODE_USERNAME:-}"
+USERNAME="${USERNAME:-}"
 REPO_NAME="${REPO_NAME:-}"
 REPO_DESC="${REPO_DESC:-GitCode Release Repository}"
 REPO_PRIVATE="${REPO_PRIVATE:-false}"
@@ -15,7 +15,7 @@ BRANCH="${BRANCH:-main}"
 UPLOAD_FILES="${UPLOAD_FILES:-}"
 
 API_BASE="https://api.gitcode.com/api/v5"
-REPO_PATH="${GITCODE_USERNAME}/${REPO_NAME}"
+REPO_PATH="${USERNAME}/${REPO_NAME}"
 
 # 日志
 log() { echo "🅲🅾🅳🅴 $*" >&2; }
@@ -33,7 +33,7 @@ api() {
 
 check_env() {
     [ -z "$GITCODE_TOKEN" ] && { log "❌ GITCODE_TOKEN 未设置"; exit 1; }
-    [ -z "$GITCODE_USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ GITCODE_USERNAME 或 REPO_NAME 未设置"; exit 1; }
+    [ -z "$USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ USERNAME 或 REPO_NAME 未设置"; exit 1; }
     log "✅ 配置检查通过"
 }
 
