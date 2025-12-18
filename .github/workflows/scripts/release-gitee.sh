@@ -19,7 +19,7 @@ REPO_PATH="${USERNAME}/${REPO_NAME}"
 RELEASE_ID=""
 
 # 日志
-log() { echo "🄶🄸🅃🄴🄴 $*" >&2; }
+log() { echo "🅶🅸🅣🅔🅔 $*" >&2; }
 
 # API 调用
 api() {
