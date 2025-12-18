@@ -5,7 +5,7 @@ set -e
 # 环境变量
 GITLAB_TOKEN="${GITLAB_TOKEN:-}"
 GITLAB_URL="${GITLAB_URL:-https://gitlab.com}"
-USERNAME="${USERNAME:-}"
+GITLAB_USERNAME="${GITLAB_USERNAME:-}"
 REPO_NAME="${REPO_NAME:-}"
 REPO_DESC="${REPO_DESC:-GitLab Release Repository}"
 REPO_PRIVATE="${REPO_PRIVATE:-false}"
@@ -16,7 +16,7 @@ BRANCH="${BRANCH:-main}"
 UPLOAD_FILES="${UPLOAD_FILES:-}"
 
 API_BASE="${GITLAB_URL}/api/v4"
-REPO_PATH="${USERNAME}/${REPO_NAME}"
+REPO_PATH="${GITLAB_USERNAME}/${REPO_NAME}"
 PROJECT_ID=""
 PACKAGE_NAME="release-files"
 ASSETS_LINKS="[]"
@@ -41,7 +41,7 @@ api() {
 
 check_env() {
     [ -z "$GITLAB_TOKEN" ] && { log "❌ GITLAB_TOKEN 未设置"; exit 1; }
-    [ -z "$USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ USERNAME 或 REPO_NAME 未设置"; exit 1; }
+    [ -z "$GITLAB_USERNAME" ] || [ -z "$REPO_NAME" ] && { log "❌ GITLAB_USERNAME 或 REPO_NAME 未设置"; exit 1; }
     PROJECT_PATH_ENCODED=$(urlencode "$REPO_PATH")
     log "✅ 配置检查通过"
 }
