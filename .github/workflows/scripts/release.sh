@@ -46,7 +46,7 @@ find_script() {
 
 # 主函数
 main() {
-    log "并行发布到: $PLATFORMS"
+    log "发布到: $PLATFORMS"
     echo ""
     
     declare -A PIDS
@@ -70,8 +70,6 @@ main() {
     
     [ $count -eq 0 ] && { log "❌ 没有可用的平台脚本"; exit 1; }
     
-    echo ""
-    log "等待所有平台完成..."
     echo ""
     
     declare -A RESULTS
