@@ -21,10 +21,11 @@ on:
           - 'gitcode'
           - 'gitee'
           - 'gitlab'
+          - 'Cloudflare R2'
         default: 'all'
       
       USERNAME:
-        description: '作者名'
+        description: '用户名'
         required: true
         default: 'whzhni'
       
@@ -45,7 +46,6 @@ on:
       
       enable_version_write:
         description: '写入版本到 version-manager.sh'
-        required: true
         type: boolean
         default: false
 
@@ -56,36 +56,9 @@ env:
   RELEASE_TITLE: ${{ github.event.inputs.release_title }}
 
 jobs:
-  prepare:
+  test-release:
     runs-on: ubuntu-latest
-    outputs:
-      platforms: ${{ steps.set-matrix.outputs.platforms }}
-    steps:
-      - name: 设置平台矩阵
-        id: set-matrix
-        run: |
-          if [ "${{ github.event.inputs.platform }}" = "all" ]; then
-            echo "platforms=[\"gitcode\",\"gitee\",\"gitlab\"]" >> $GITHUB_OUTPUT
-          else
-            echo "platforms=[\"${{ github.event.inputs.platform }}\"]" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: 显示配置
-        run: |
-          echo "### 🧪 测试配置" >> $GITHUB_STEP_SUMMARY
-          echo "- **操作**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **平台**: ${{ github.event.inputs.platform }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **项目**: ${{ env.USERNAME }}/${{ env.REPO_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **标签**: ${{ env.TAG_NAME }}" >> $GITHUB_STEP_SUMMARY
-
-  execute:
-    needs: prepare
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        platform: ${{ fromJson(needs.prepare.outputs.platforms) }}
-      fail-fast: false
-    name: ${{ github.event.inputs.action }} - ${{ matrix.platform }}
+    name: ${{ github.event.inputs.action }} - ${{ github.event.inputs.platform }}
     
     steps:
       - uses: actions/checkout@v4
@@ -95,38 +68,54 @@ jobs:
         run: |
           echo "构建时间: $(date)" > build-time.txt
           echo "版本: ${{ env.TAG_NAME }}" > version.txt
-          echo "# 测试 Release" > README.md
+          echo "# 测试 Release 文件" > README.md
+          echo "测试平台: ${{ github.event.inputs.platform }}" >> README.md
       
       - name: 写入版本信息
         if: github.event.inputs.action == '创建Release' && github.event.inputs.enable_version_write == 'true'
         run: |
-          [ -f "version-manager.sh" ] && chmod +x version-manager.sh && ./version-manager.sh set "${{ env.TAG_NAME }}"
+          chmod +x .github/workflows/scripts/version-manager.sh
+          .github/workflows/scripts/version-manager.sh set "${{ env.TAG_NAME }}"
       
-      - name: 执行操作
+      - name: 创建 Release
+        if: github.event.inputs.action == '创建Release'
+        env:
+          # 平台选择
+          PLATFORMS: ${{ github.event.inputs.platform == 'all' && 'gitcode gitee gitlab r2' || github.event.inputs.platform }}
+          
+          # Tokens
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          
+          # Release 信息
+          RELEASE_BODY: "## 🧪 测试 Release\n\n平台: ${{ github.event.inputs.platform }}"
+          UPLOAD_FILES: "build-time.txt version.txt README.md"
+          BRANCH: main
+        run: .github/workflows/scripts/release.sh
+      
+      - name: 删除仓库
+        if: github.event.inputs.action == '删除仓库'
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          PLATFORM: ${{ matrix.platform }}
-          ACTION: ${{ github.event.inputs.action }}
-          RELEASE_BODY: "${{ matrix.platform }} 测试"
-          UPLOAD_FILES: "build-time.txt version.txt README.md"
-        run: |
-          chmod +x .github/workflows/scripts/*.sh
-          if [ "$ACTION" = "创建Release" ]; then
-            ./.github/workflows/scripts/release-${PLATFORM}.sh
-          else
-            ./.github/workflows/scripts/delete-repo.sh "$PLATFORM"
-          fi
-
-  summary:
-    needs: [prepare, execute]
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          PLATFORMS: ${{ github.event.inputs.platform == 'all' && 'gitcode gitee gitlab r2' || github.event.inputs.platform }}
+        run: .github/workflows/scripts/delete-repo.sh
+      
       - name: 生成报告
+        if: always()
         run: |
-          echo "# 📊 执行结果" >> $GITHUB_STEP_SUMMARY
+          echo "# 📊 测试结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **操作**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
           echo "- **平台**: ${{ github.event.inputs.platform }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **状态**: ${{ needs.execute.result == 'success' && '✅ 成功' || '❌ 失败' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **项目**: ${{ env.USERNAME }}/${{ env.REPO_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **标签**: ${{ env.TAG_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **状态**: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}" >> $GITHUB_STEP_SUMMARY
