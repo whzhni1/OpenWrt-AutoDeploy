@@ -8,7 +8,7 @@ R2_ACCESS_KEY="${R2_ACCESS_KEY:-}"
 R2_SECRET_KEY="${R2_SECRET_KEY:-}"
 R2_BUCKET="${R2_BUCKET:-openwrt-autodeploy}"
 R2_PUBLIC_URL="${R2_PUBLIC_URL:-https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev}"
-PROJECT_NAME="${PROJECT_NAME:-}"
+REPO_NAME="${REPO_NAME:-}"
 TAG_NAME="${TAG_NAME:-}"
 UPLOAD_FILES="${UPLOAD_FILES:-}"
 
@@ -26,7 +26,7 @@ check_env() {
     [ -z "$R2_ACCESS_KEY" ] && { log "❌ R2_ACCESS_KEY 未设置"; exit 1; }
     [ -z "$R2_SECRET_KEY" ] && { log "❌ R2_SECRET_KEY 未设置"; exit 1; }
     [ -z "$R2_ACCOUNT_ID" ] && { log "❌ R2_ACCOUNT_ID 未设置"; exit 1; }
-    [ -z "$PROJECT_NAME" ] || [ -z "$TAG_NAME" ] && { log "❌ PROJECT_NAME 或 TAG_NAME 未设置"; exit 1; }
+    [ -z "$REPO_NAME" ] || [ -z "$TAG_NAME" ] && { log "❌ REPO_NAME 或 TAG_NAME 未设置"; exit 1; }
     command -v aws >/dev/null 2>&1 || { log "❌ 需要 aws-cli"; exit 1; }
     log "✅ 环境检查通过"
 }
@@ -35,7 +35,7 @@ check_env() {
 check_version() {
     log "🔍 检查版本: $TAG_NAME"
     
-    local releases_url="$R2_PUBLIC_URL/$PROJECT_NAME/releases"
+    local releases_url="$R2_PUBLIC_URL/$REPO_NAME/releases"
     local existing=$(curl -sf "$releases_url" 2>/dev/null || echo "")
     
     if [ -n "$existing" ]; then
@@ -47,10 +47,10 @@ check_version() {
         
         # 删除所有版本目录（保留 releases）
         log "🧹 删除旧版本..."
-        aws s3 ls "s3://$R2_BUCKET/$PROJECT_NAME/" --endpoint-url="$R2_ENDPOINT" | \
+        aws s3 ls "s3://$R2_BUCKET/$REPO_NAME/" --endpoint-url="$R2_ENDPOINT" | \
         awk '{print $2}' | grep -E '^v' | while read -r old_version; do
             old_version="${old_version%/}"
-            [ -n "$old_version" ] && aws s3 rm "s3://$R2_BUCKET/$PROJECT_NAME/$old_version/" --recursive --endpoint-url="$R2_ENDPOINT" >/dev/null
+            [ -n "$old_version" ] && aws s3 rm "s3://$R2_BUCKET/$REPO_NAME/$old_version/" --recursive --endpoint-url="$R2_ENDPOINT" >/dev/null
             log "  ✓ 已删除 $old_version"
         done
     else
@@ -62,7 +62,7 @@ check_version() {
 
 # 上传文件
 upload_files() {
-    log "📤 上传到 $PROJECT_NAME/$TAG_NAME/"
+    log "📤 上传到 $REPO_NAME/$TAG_NAME/"
     
     local releases='[]'
     local uploaded=0
@@ -73,8 +73,8 @@ upload_files() {
         [ -z "$file" ] || [ ! -f "$file" ] && continue
         
         local name=$(basename "$file")
-        local s3_path="s3://$R2_BUCKET/$PROJECT_NAME/$TAG_NAME/$name"
-        local public_url="$R2_PUBLIC_URL/$PROJECT_NAME/$TAG_NAME/$name"
+        local s3_path="s3://$R2_BUCKET/$REPO_NAME/$TAG_NAME/$name"
+        local public_url="$R2_PUBLIC_URL/$REPO_NAME/$TAG_NAME/$name"
         
         log "  [$((uploaded + 1))/${#files[@]}] $name"
         
@@ -98,7 +98,7 @@ upload_files() {
     log "📝 更新 releases 文件..."
     echo "$releases" | jq '.' > /tmp/releases
     
-    aws s3 cp /tmp/releases "s3://$R2_BUCKET/$PROJECT_NAME/releases" \
+    aws s3 cp /tmp/releases "s3://$R2_BUCKET/$REPO_NAME/releases" \
         --endpoint-url="$R2_ENDPOINT" \
         --content-type "application/json" \
         --no-progress >/dev/null
@@ -107,14 +107,14 @@ upload_files() {
 }
 
 main() {
-    log "🚀 R2 上传: $PROJECT_NAME $TAG_NAME"
+    log "🚀 R2 上传: $REPO_NAME $TAG_NAME"
     
     check_env
     check_version || exit 0
     upload_files
     
     log "🎉 完成"
-    log "📍 $R2_PUBLIC_URL/$PROJECT_NAME/"
+    log "📍 $R2_PUBLIC_URL/$REPO_NAME/"
 }
 
 main "$@"
