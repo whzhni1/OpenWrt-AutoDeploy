@@ -11,18 +11,29 @@ on:
         default: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: 读取同步配置
+        id: set-matrix
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          matrix=$(yq eval '.repositories' sync-config.yaml -o=json -I=0)
+          echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
+          echo "📋 读取到 $(echo $matrix | jq '. | length') 个仓库配置"
+          echo "$matrix" | jq -r '.[] | "  - \(.github_owner)/\(.github_repo)"'
+
   sync:
+    needs: prepare
     name: ${{ matrix.github_repo }}
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        include:
-          - {github_owner: "vernesong", github_repo: "OpenClash", local_name: "luci-app-openclash"}
-          - {github_owner: "whzhni1", github_repo: "luci-app-tailscale", local_name: "tailscale"}
-          - {github_owner: "whzhni1", github_repo: "luci-app-lucky", local_name: "lucky"}
-          - {github_owner: "eamonxg", github_repo: "luci-theme-aurora"}
-          - {github_owner: "xiaorouji", github_repo: "openwrt-passwall", local_name: "luci-app-passwall", filter_exclude: "luci-19.07* *.zip"}
-          - {github_owner: "xiaorouji", github_repo: "openwrt-passwall2", local_name: "luci-app-passwall2", filter_exclude: "luci-19.07* *.zip"}
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
       fail-fast: false
       max-parallel: 3
       
@@ -131,76 +142,21 @@ jobs:
       - name: 并行发布
         if: steps.check.outputs.needs_update == 'true'
         env:
+          # 平台选择
+          PLATFORMS: ${{ matrix.platforms || 'gitcode gitee gitlab r2' }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          GITCODE_USERNAME: ${{ secrets.GITCODE_USERNAME || 'whzhni' }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME || 'whzhni' }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITLAB_USERNAME: ${{ secrets.GITLAB_USERNAME || 'whzhni' }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          
+          # 基础信息
           REPO_NAME: ${{ steps.check.outputs.local_name }}
           TAG_NAME: ${{ steps.check.outputs.version }}
-          RELEASE_TITLE: "${{ steps.check.outputs.local_name }} ${{ steps.check.outputs.version }}"
-        run: |
-          export UPLOAD_FILES="$(find "$DOWNLOAD_DIR" -type f | tr '\n' ' ')"
-          export RELEASE_BODY="## 📦 ${{ steps.check.outputs.local_name }} ${{ steps.check.outputs.version }}
-          
-          ### 📌 上游信息
-          - 项目: https://github.com/${{ matrix.github_owner }}/${{ matrix.github_repo }}
-          - 同步时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
-          export RUNNER_TEMP="${{ runner.temp }}"
-          export BRANCH="main"
-          
-          declare -A PIDS RESULTS
-          
-          [ -n "$GITCODE_TOKEN" ] && {
-            (
-              export USERNAME="$GITCODE_USERNAME"
-              export GITCODE_TOKEN="$GITCODE_TOKEN"
-              export REPO_NAME="$REPO_NAME"
-              export TAG_NAME="$TAG_NAME"
-              export RELEASE_TITLE="$RELEASE_TITLE"
-              .github/workflows/scripts/release-gitcode.sh
-            ) &
-            PIDS[gitcode]=$!
-          }
-          
-          [ -n "$GITEE_TOKEN" ] && {
-            (
-              export USERNAME="$GITEE_USERNAME"
-              export GITEE_TOKEN="$GITEE_TOKEN"
-              export REPO_NAME="$REPO_NAME"
-              export TAG_NAME="$TAG_NAME"
-              export RELEASE_TITLE="$RELEASE_TITLE"
-              .github/workflows/scripts/release-gitee.sh
-            ) &
-            PIDS[gitee]=$!
-          }
-          
-          [ -n "$GITLAB_TOKEN" ] && {
-            (
-              export USERNAME="$GITLAB_USERNAME"
-              export GITLAB_TOKEN="$GITLAB_TOKEN"
-              export REPO_NAME="$REPO_NAME"
-              export TAG_NAME="$TAG_NAME"
-              export RELEASE_TITLE="$RELEASE_TITLE"
-              .github/workflows/scripts/release-gitlab.sh
-            ) &
-            PIDS[gitlab]=$!
-          }
-          
-          for platform in "${!PIDS[@]}"; do
-            wait ${PIDS[$platform]}
-            RESULTS[$platform]=$?
-            echo "$platform: $([ "${RESULTS[$platform]}" = "0" ] && echo '✅' || echo '❌')"
-          done
-          
-          success=false
-          for status in "${RESULTS[@]}"; do
-            [ "$status" = "0" ] && success=true && break
-          done
-          
-          $success || { echo "::error::所有平台都发布失败"; exit 1; }
-          echo "release_success=true" >> $GITHUB_ENV
+          DOWNLOAD_DIR: ${{ env.DOWNLOAD_DIR }}
+          GITHUB_REPO_URL: "https://github.com/${{ matrix.github_owner }}/${{ matrix.github_repo }}"
+        run: .github/workflows/scripts/release.sh
       
       - name: 保存版本信息
         if: env.release_success == 'true'
@@ -314,7 +270,7 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**统计:** 总计 $total | 已发布 $updated | 无需更新 $skipped | 失败 $failed" >> $GITHUB_STEP_SUMMARY
-          echo "**平台:** GitCode, Gitee, GitLab" >> $GITHUB_STEP_SUMMARY
+          echo "**平台:** GitCode, Gitee, GitLab, R2" >> $GITHUB_STEP_SUMMARY
       
       - uses: geekyeggo/delete-artifact@v5
         if: always()
