@@ -78,8 +78,8 @@ EOF
     git config user.email "bot@gitee.com"
     git remote add origin "https://oauth2:${GITEE_TOKEN}@gitee.com/${REPO_PATH}.git"
     git add . && git commit -m "Initial commit" -q
-    git push -u origin HEAD:"$BRANCH" 2>&1 | sed "s/${GITEE_TOKEN}/***TOKEN***/g" || { log "❌ 初始化失败"; exit 1; }
-    
+    git push -u origin HEAD:"$BRANCH" >/dev/null 2>&1 || { log "❌ 初始化失败"; exit 1; }
+
     cd - >/dev/null && rm -rf "$tmp"
     log "✅ 仓库初始化完成"
     return 1
