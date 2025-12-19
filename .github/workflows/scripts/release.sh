@@ -1,22 +1,27 @@
 #!/bin/bash
-
 set -e
-
-# 环境变量
+USERNAME="${USERNAME:?❌ 错误: USERNAME 未设置}"
+REPO_NAME="${REPO_NAME:?❌ 错误: REPO_NAME 未设置}"
+TAG_NAME="${TAG_NAME:?❌ 错误: TAG_NAME 未设置}"
 PLATFORMS="${PLATFORMS:-gitcode gitee gitlab r2}"
 SCRIPTS_DIR="${SCRIPTS_DIR:-$(dirname "$0")}"
-
-# 自动设置默认值
-USERNAME="${USERNAME:-whzhni}"
-BRANCH="${BRANCH:-main}"
 RUNNER_TEMP="${RUNNER_TEMP:-/tmp}"
+GITCODE_USERNAME="${GITCODE_USERNAME:-$USERNAME}"
+GITEE_USERNAME="${GITEE_USERNAME:-$USERNAME}"
+GITLAB_USERNAME="${GITLAB_USERNAME:-$USERNAME}"
 
-# 自动生成 UPLOAD_FILES
+# 批量处理并导出可选变量
+for var in GITCODE_TOKEN GITEE_TOKEN GITLAB_TOKEN \
+           R2_ACCOUNT_ID R2_ACCESS_KEY R2_SECRET_KEY R2_PUBLIC_URL \
+           DOWNLOAD_DIR GITHUB_REPO_URL UPLOAD_FILES RELEASE_TITLE RELEASE_BODY; do
+    export "$var"="${!var:-}"
+done
+
+# 自动生成内容
 if [ -n "$DOWNLOAD_DIR" ] && [ -z "$UPLOAD_FILES" ]; then
     export UPLOAD_FILES="$(find "$DOWNLOAD_DIR" -type f 2>/dev/null | tr '\n' ' ')"
 fi
 
-# 自动生成 RELEASE_TITLE 和 RELEASE_BODY
 if [ -z "$RELEASE_TITLE" ]; then
     export RELEASE_TITLE="${REPO_NAME} ${TAG_NAME}"
 fi
@@ -29,15 +34,13 @@ if [ -z "$RELEASE_BODY" ]; then
 - 同步时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
 fi
 
-# 导出变量供子脚本使用
-export USERNAME
-export BRANCH RUNNER_TEMP
-export REPO_NAME TAG_NAME RELEASE_TITLE RELEASE_BODY UPLOAD_FILES
+# 导出其他必需变量
+export USERNAME REPO_NAME TAG_NAME PLATFORMS RUNNER_TEMP
+export GITCODE_USERNAME GITEE_USERNAME GITLAB_USERNAME
 
-# 日志
+# 工具函数
 log() { echo "🚀 $*" >&2; }
 
-# 查找平台脚本
 find_script() {
     local platform="$1"
     local script="$SCRIPTS_DIR/release-${platform}.sh"
@@ -46,7 +49,11 @@ find_script() {
 
 # 主函数
 main() {
-    log "发布到: $PLATFORMS"
+    log "发布配置:"
+    log "  用户名: $USERNAME"
+    log "  仓库: $REPO_NAME"
+    log "  版本: $TAG_NAME"
+    log "  平台: $PLATFORMS"
     echo ""
     
     declare -A PIDS
@@ -60,17 +67,20 @@ main() {
             continue
         fi
         
-        chmod +x "$script"
-        "$script" &
+        bash "$script" &
         PIDS[$platform]=$!
         
         log "  📤 $platform (PID: ${PIDS[$platform]})"
         count=$((count + 1))
     done
     
-    [ $count -eq 0 ] && { log "❌ 没有可用的平台脚本"; exit 1; }
+    if [ $count -eq 0 ]; then
+        log "❌ 没有可用的平台脚本"
+        exit 1
+    fi
     
     echo ""
+    log "等待发布完成..."
     
     declare -A RESULTS
     local success=0 failed=0
@@ -83,10 +93,19 @@ main() {
             log "  $platform: ✅"
             success=$((success + 1))
         else
-            log "  $platform: ❌"
+            log "  $platform: ❌ (退出码: ${RESULTS[$platform]})"
             failed=$((failed + 1))
         fi
     done
+    
+    echo ""
+    log "发布完成: 成功 $success, 失败 $failed"
+    
+    # 如果所有平台都失败，返回错误
+    [ $success -eq 0 ] && exit 1
+    
+    # 部分成功也返回 0（允许部分平台失败）
+    return 0
 }
 
 main "$@"
