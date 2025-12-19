@@ -87,17 +87,6 @@ main() {
             failed=$((failed + 1))
         fi
     done
-    
-    echo ""
-    
-    if [ $success -eq $count ]; then
-        log "🎉 全部成功: $success/$count"
-    elif [ $success -gt 0 ]; then
-        log "⚠️  部分成功: $success/$count"
-    else
-        log "❌ 全部失败: $failed/$count"
-        exit 1
-    fi
 }
 
 main "$@"
