@@ -8,13 +8,21 @@
 # - filter_exclude: 排除文件规则，空格分隔（选填）
 # - filter_include: 包含文件规则，格式：pattern:数量（选填）
 # - filter_by_version: 是否只保留版本号匹配的文件（选填，默认 false）
+# - username: 覆盖全局用户名（选填）
 
+# 🌐 全局默认配置
+defaults:
+  username: whzhni  # 默认用户名（所有平台通用）
+  branch: main      # 默认分支
+  platforms: gitcode gitee gitlab r2  # 默认平台
+
+# 📦 仓库配置
 repositories:
   - github_owner: vernesong
     github_repo: OpenClash
     local_name: luci-app-openclash
-    platforms: r2
-
+    platforms: r2  # 覆盖全局平台设置
+    
   - github_owner: whzhni1
     github_repo: luci-app-tailscale
     local_name: tailscale
@@ -35,3 +43,4 @@ repositories:
     github_repo: openwrt-passwall2
     local_name: luci-app-passwall2
     filter_exclude: luci-19.07* *.zip
+    
