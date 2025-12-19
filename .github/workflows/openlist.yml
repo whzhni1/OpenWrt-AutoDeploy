@@ -16,15 +16,25 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
       has_updates: ${{ steps.matrix.outputs.has_updates }}
+      defaults: ${{ steps.read-config.outputs.defaults }}
     
     steps:
       - uses: actions/checkout@v4
       
+      - name: 读取全局配置
+        id: read-config
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          defaults=$(yq eval '.defaults' config/sync-config.yaml -o=json -I=0)
+          echo "defaults=$defaults" >> $GITHUB_OUTPUT
+          
+          echo "📋 全局配置:"
+          echo "$defaults" | jq .
+      
       - name: 检查更新
         id: matrix
         run: |
-          chmod +x .github/workflows/scripts/version-manager.sh
-          
           PROJECTS='[{"github_owner":"sbwml","github_repo":"luci-app-openlist2","local_name":"openlist2"}]'
           UPDATES='[]'
           
@@ -36,7 +46,7 @@ jobs:
             latest=$(curl -s "https://api.github.com/repos/$owner/$repo/tags" | jq -r '.[0].name // empty')
             [ -z "$latest" ] && { echo "⚠️  $name: 无上游版本"; continue; }
             
-            local=$(.github/workflows/scripts/version-manager.sh read "$name" 2>/dev/null || echo "")
+            local=$(bash .github/workflows/scripts/version-manager.sh read "$name" 2>/dev/null || echo "")
             
             if [ -z "$local" ] || [ "$local" != "$latest" ] || [ "${{ inputs.force_build }}" = "true" ]; then
               echo "✅ $name: ${local:-新项目} → $latest"
@@ -117,9 +127,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 配置脚本
-        run: chmod +x .github/workflows/scripts/{release-*.sh,version-manager.sh}
-
       - uses: actions/download-artifact@v4
         with:
           pattern: ${{ matrix.project.local_name }}-*
@@ -153,88 +160,43 @@ jobs:
           done
           
           echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
-          echo "文件统计: $(find "$RELEASE_DIR" -type f 2>/dev/null | wc -l) 个"
+          echo "📦 文件统计: $(find "$RELEASE_DIR" -type f 2>/dev/null | wc -l) 个"
 
       - name: 并行发布
         env:
+          USERNAME: ${{ fromJSON(needs.check-updates.outputs.defaults).username }}
+          PLATFORMS: ${{ fromJSON(needs.check-updates.outputs.defaults).platforms }}
+          R2_PUBLIC_URL: ${{ fromJSON(needs.check-updates.outputs.defaults).R2_PUBLIC_URL }}
+          
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          GITCODE_USERNAME: ${{ secrets.GITCODE_USERNAME || 'whzhni' }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME || 'whzhni' }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITLAB_USERNAME: ${{ secrets.GITLAB_USERNAME || 'whzhni' }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          
           REPO_NAME: ${{ matrix.project.local_name }}
           TAG_NAME: ${{ matrix.project.version }}
-          RELEASE_TITLE: "${{ matrix.project.local_name }} ${{ matrix.project.version }}"
-          RELEASE_DIR: ${{ env.RELEASE_DIR }}
+          DOWNLOAD_DIR: ${{ env.RELEASE_DIR }}
+          GITHUB_REPO_URL: "https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}"
         run: |
-          export UPLOAD_FILES="$(find "$RELEASE_DIR" -type f \( -name '*.ipk' -o -name '*.apk' \) 2>/dev/null | tr '\n' ' ')"
+          export UPLOAD_FILES="$(find "$DOWNLOAD_DIR" -type f \( -name '*.ipk' -o -name '*.apk' \) 2>/dev/null | tr '\n' ' ')"
           export RELEASE_BODY="## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }}
 
           ### 📌 项目信息
-          - 上游仓库: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
+          - 上游仓库: $GITHUB_REPO_URL
           - 构建时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S') (北京时间)
           - SDK 版本: OpenWrt 24.10 + SNAPSHOT"
-          export RUNNER_TEMP="${{ runner.temp }}"
-          export BRANCH="main"
           
           echo "📦 准备发布 $(echo $UPLOAD_FILES | wc -w) 个文件"
-          
-          declare -A PIDS RESULTS
-          
-          [ -n "$GITCODE_TOKEN" ] && {
-            (
-              export USERNAME="$GITCODE_USERNAME"
-              export GITCODE_TOKEN="$GITCODE_TOKEN"
-              export REPO_NAME="$REPO_NAME"
-              export TAG_NAME="$TAG_NAME"
-              export RELEASE_TITLE="$RELEASE_TITLE"
-              .github/workflows/scripts/release-gitcode.sh
-            ) &
-            PIDS[gitcode]=$!
-          }
-          
-          [ -n "$GITEE_TOKEN" ] && {
-            (
-              export USERNAME="$GITEE_USERNAME"
-              export GITEE_TOKEN="$GITEE_TOKEN"
-              export REPO_NAME="$REPO_NAME"
-              export TAG_NAME="$TAG_NAME"
-              export RELEASE_TITLE="$RELEASE_TITLE"
-              .github/workflows/scripts/release-gitee.sh
-            ) &
-            PIDS[gitee]=$!
-          }
-          
-          [ -n "$GITLAB_TOKEN" ] && {
-            (
-              export USERNAME="$GITLAB_USERNAME"
-              export GITLAB_TOKEN="$GITLAB_TOKEN"
-              export REPO_NAME="$REPO_NAME"
-              export TAG_NAME="$TAG_NAME"
-              export RELEASE_TITLE="$RELEASE_TITLE"
-              .github/workflows/scripts/release-gitlab.sh
-            ) &
-            PIDS[gitlab]=$!
-          }
-          
-          for platform in "${!PIDS[@]}"; do
-            wait ${PIDS[$platform]}
-            RESULTS[$platform]=$?
-            echo "$platform: $([ "${RESULTS[$platform]}" = "0" ] && echo '✅' || echo '❌')"
-          done
-          
-          for status in "${RESULTS[@]}"; do
-            [ "$status" = "0" ] && exit 0
-          done
-          echo "::error::所有平台都发布失败"; exit 1
+          bash .github/workflows/scripts/release.sh
 
       - name: 更新版本记录
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          .github/workflows/scripts/version-manager.sh write "${{ matrix.project.local_name }}" "${{ matrix.project.version }}"
-          git add version.txt
+          bash .github/workflows/scripts/version-manager.sh write "${{ matrix.project.local_name }}" "${{ matrix.project.version }}"
+          git add config/version.txt
           git diff --cached --quiet || {
             git commit -m "📝 ${{ matrix.project.local_name }} → ${{ matrix.project.version }}"
             git pull --rebase origin ${{ github.ref_name }} || git push --force-with-lease
