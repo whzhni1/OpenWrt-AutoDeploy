@@ -25,10 +25,10 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           
-          defaults=$(yq eval '.defaults' sync-config.yaml -o=json -I=0)
+          defaults=$(yq eval '.defaults' config/sync-config.yaml -o=json -I=0)
           echo "defaults=$defaults" >> $GITHUB_OUTPUT
           
-          matrix=$(yq eval '.repositories' sync-config.yaml -o=json -I=0)
+          matrix=$(yq eval '.repositories' config/sync-config.yaml -o=json -I=0)
           echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
           
           echo "📋 读取到 $(echo $matrix | jq '. | length') 个仓库配置"
@@ -169,7 +169,11 @@ jobs:
         env:
           PLATFORMS: ${{ matrix.platforms || fromJSON(needs.prepare.outputs.defaults).platforms }}
           USERNAME: ${{ matrix.username || fromJSON(needs.prepare.outputs.defaults).username }}
-          BRANCH: ${{ matrix.branch || fromJSON(needs.prepare.outputs.defaults).branch }}
+          R2_PUBLIC_URL: ${{ matrix.r2_public_url || fromJSON(needs.prepare.outputs.defaults).R2_PUBLIC_URL }}
+          GITCODE_USERNAME: ${{ matrix.gitcode_username || matrix.username || fromJSON(needs.prepare.outputs.defaults).username }}
+          GITEE_USERNAME: ${{ matrix.gitee_username || matrix.username || fromJSON(needs.prepare.outputs.defaults).username }}
+          GITLAB_USERNAME: ${{ matrix.gitlab_username || matrix.username || fromJSON(needs.prepare.outputs.defaults).username }}
+          
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -257,7 +261,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add version.txt
+          git add config/version.txt
           git diff --cached --quiet || {
             git commit -m "📝 批量更新版本记录"
             git pull --rebase || true
