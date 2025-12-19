@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      defaults: ${{ steps.set-matrix.outputs.defaults }}
     steps:
       - uses: actions/checkout@v4
       
@@ -24,11 +25,13 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           
+          defaults=$(yq eval '.defaults' sync-config.yaml -o=json -I=0)
+          echo "defaults=$defaults" >> $GITHUB_OUTPUT
+          
           matrix=$(yq eval '.repositories' sync-config.yaml -o=json -I=0)
           echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
           
           echo "📋 读取到 $(echo $matrix | jq '. | length') 个仓库配置"
-          echo "$matrix" | jq -r '.[] | "  - \(.github_owner)/\(.github_repo)"'
 
   sync:
     needs: prepare
@@ -50,7 +53,6 @@ jobs:
           local_name="${{ matrix.local_name || matrix.github_repo }}"
           repo="${{ matrix.github_owner }}/${{ matrix.github_repo }}"
           
-          # 获取最新 tag
           tag=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/$repo/tags?per_page=1" | jq -r '.[0].name // empty')
           
@@ -59,7 +61,6 @@ jobs:
             exit 0
           fi
           
-          # 获取 Release
           release=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/$repo/releases/tags/$tag")
           
@@ -74,7 +75,6 @@ jobs:
           echo "$release" > /tmp/release.json
           [[ "$tag" =~ ^v ]] && version="$tag" || version="v$tag"
           
-          # 检查是否需要更新
           local=$(bash .github/workflows/scripts/version-manager.sh read "$local_name" 2>/dev/null || echo "")
           
           if [ -z "$local" ] || [ "$local" != "$version" ] || [ "${{ inputs.force_sync }}" = "true" ]; then
@@ -89,28 +89,21 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
           echo "local_version=${local:-新建}" >> $GITHUB_OUTPUT
       
-      - name: 下载并过滤文件
+      - name: 过滤并下载文件
         id: download
         if: steps.check.outputs.needs_update == 'true'
         run: |
+          VERSION="${{ steps.check.outputs.version }}"
+          VERSION_NO_V="${VERSION#v}"
           DOWNLOAD_DIR="${{ runner.temp }}/downloads"
           mkdir -p "$DOWNLOAD_DIR"
           
-          # 下载所有文件
-          cat /tmp/release.json | jq -r '.assets[] | "\(.browser_download_url)|\(.name)"' | \
-          while IFS='|' read -r url filename; do
-            [ -n "$url" ] && curl -sL "$url" -o "$DOWNLOAD_DIR/$filename" && echo "✓ $filename"
-          done
+          # 过滤文件列表
+          all_files=$(jq -r '.assets[] | "\(.browser_download_url)|\(.name)"' /tmp/release.json)
+          filtered_files=""
           
-          cd "$DOWNLOAD_DIR"
-          VERSION="${{ steps.check.outputs.version }}"
-          VERSION_NO_V="${VERSION#v}"
-          
-          # 应用过滤规则
           if [ -n "${{ matrix.filter_include }}" ]; then
-            temp=$(mktemp -d)
             declare -A count limit
-            
             for rule in ${{ matrix.filter_include }}; do
               pattern="${rule%:*}"
               pattern="${pattern//\{VERSION\}/$VERSION_NO_V}"
@@ -118,39 +111,71 @@ jobs:
               [ "$lim" = "$rule" ] && lim=999
               limit["$pattern"]=$lim
               count["$pattern"]=0
-              
-              for file in $pattern; do
-                [ ! -f "$file" ] && continue
-                [ ${count["$pattern"]} -ge ${limit["$pattern"]} ] && break
-                mv "$file" "$temp/" && count["$pattern"]=$((${count["$pattern"]} + 1))
-              done
             done
             
-            rm -rf * && mv "$temp"/* . && rm -rf "$temp"
+            while IFS='|' read -r url filename; do
+              [ -z "$url" ] && continue
+              for pattern in "${!limit[@]}"; do
+                if [[ "$filename" == $pattern ]]; then
+                  if [ ${count["$pattern"]} -lt ${limit["$pattern"]} ]; then
+                    filtered_files+="$url|$filename"$'\n'
+                    count["$pattern"]=$((${count["$pattern"]} + 1))
+                    break
+                  fi
+                fi
+              done
+            done <<< "$all_files"
             
           elif [ -n "${{ matrix.filter_exclude }}" ]; then
-            for pattern in ${{ matrix.filter_exclude }}; do
-              rm -f $pattern 2>/dev/null
-            done
+            while IFS='|' read -r url filename; do
+              [ -z "$url" ] && continue
+              excluded=false
+              for pattern in ${{ matrix.filter_exclude }}; do
+                [[ "$filename" == $pattern ]] && excluded=true && break
+              done
+              [ "$excluded" = false ] && filtered_files+="$url|$filename"$'\n'
+            done <<< "$all_files"
+          else
+            filtered_files="$all_files"
           fi
           
-          [ "${{ matrix.filter_by_version }}" = "true" ] && find . -type f ! -name "*$VERSION_NO_V*" -delete
+          if [ "${{ matrix.filter_by_version }}" = "true" ]; then
+            temp=""
+            while IFS='|' read -r url filename; do
+              [ -z "$url" ] && continue
+              [[ "$filename" == *"$VERSION_NO_V"* ]] && temp+="$url|$filename"$'\n'
+            done <<< "$filtered_files"
+            filtered_files="$temp"
+          fi
           
+          file_count=$(echo "$filtered_files" | grep -c '|' || echo 0)
+          echo "📦 过滤: $(jq '.assets|length' /tmp/release.json) → $file_count 个文件"
+          
+          [ $file_count -eq 0 ] && exit 0
+          
+          # 下载文件
+          downloaded=0
+          while IFS='|' read -r url filename; do
+            [ -z "$url" ] && continue
+            curl -fsSL "$url" -o "$DOWNLOAD_DIR/$filename" && echo "  ✓ $filename" && downloaded=$((downloaded + 1))
+          done <<< "$filtered_files"
+          
+          echo "✅ 下载: $downloaded 个文件"
           echo "DOWNLOAD_DIR=$DOWNLOAD_DIR" >> $GITHUB_ENV
-          echo "📦 文件: $(find . -type f | wc -l) 个"
       
       - name: 并行发布
         id: release
         if: steps.check.outputs.needs_update == 'true'
         env:
-          PLATFORMS: ${{ matrix.platforms || 'gitcode gitee gitlab r2' }}
+          PLATFORMS: ${{ matrix.platforms || fromJSON(needs.prepare.outputs.defaults).platforms }}
+          USERNAME: ${{ matrix.username || fromJSON(needs.prepare.outputs.defaults).username }}
+          BRANCH: ${{ matrix.branch || fromJSON(needs.prepare.outputs.defaults).branch }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
-          
           REPO_NAME: ${{ steps.check.outputs.local_name }}
           TAG_NAME: ${{ steps.check.outputs.version }}
           DOWNLOAD_DIR: ${{ env.DOWNLOAD_DIR }}
@@ -174,8 +199,6 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/status
-          
-          # ✅ 修正判断逻辑
           if [ "${{ steps.check.outputs.needs_update }}" != "true" ]; then
             status="✅ 无需更新"
           elif [ "${{ steps.release.outcome }}" = "success" ]; then
@@ -203,16 +226,13 @@ jobs:
     needs: sync
     runs-on: ubuntu-latest
     if: always()
-    
     steps:
       - uses: actions/checkout@v4
-      
       - uses: actions/download-artifact@v4
         with:
           pattern: version-*
           path: /tmp/versions
         continue-on-error: true
-      
       - uses: actions/download-artifact@v4
         with:
           pattern: status-*
@@ -230,8 +250,7 @@ jobs:
               updated=$((updated + 1))
             }
           done
-          
-          [ $updated -gt 0 ] && echo "need_push=true" >> $GITHUB_ENV || echo "ℹ️  无需更新"
+          [ $updated -gt 0 ] && echo "need_push=true" >> $GITHUB_ENV
       
       - name: 推送版本记录
         if: env.need_push == 'true'
@@ -241,8 +260,8 @@ jobs:
           git add version.txt
           git diff --cached --quiet || {
             git commit -m "📝 批量更新版本记录"
-            git pull --rebase origin ${{ github.ref_name }} || git push --force-with-lease
-            git push origin ${{ github.ref_name }}
+            git pull --rebase || true
+            git push
           }
       
       - name: 生成报告
@@ -272,7 +291,6 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**统计:** 总计 $total | 已发布 $updated | 无需更新 $skipped | 失败 $failed" >> $GITHUB_STEP_SUMMARY
-          echo "**平台:** GitCode, Gitee, GitLab, R2" >> $GITHUB_STEP_SUMMARY
       
       - uses: geekyeggo/delete-artifact@v5
         if: always()
