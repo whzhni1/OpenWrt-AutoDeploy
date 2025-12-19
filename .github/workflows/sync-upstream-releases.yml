@@ -74,7 +74,7 @@ jobs:
           echo "$release" > /tmp/release.json
           [[ "$tag" =~ ^v ]] && version="$tag" || version="v$tag"
           
-          # ✅ 使用 bash 执行脚本
+          # 检查是否需要更新
           local=$(bash .github/workflows/scripts/version-manager.sh read "$local_name" 2>/dev/null || echo "")
           
           if [ -z "$local" ] || [ "$local" != "$version" ] || [ "${{ inputs.force_sync }}" = "true" ]; then
@@ -90,6 +90,7 @@ jobs:
           echo "local_version=${local:-新建}" >> $GITHUB_OUTPUT
       
       - name: 下载并过滤文件
+        id: download
         if: steps.check.outputs.needs_update == 'true'
         run: |
           DOWNLOAD_DIR="${{ runner.temp }}/downloads"
@@ -139,6 +140,7 @@ jobs:
           echo "📦 文件: $(find . -type f | wc -l) 个"
       
       - name: 并行发布
+        id: release
         if: steps.check.outputs.needs_update == 'true'
         env:
           PLATFORMS: ${{ matrix.platforms || 'gitcode gitee gitlab r2' }}
@@ -153,17 +155,16 @@ jobs:
           TAG_NAME: ${{ steps.check.outputs.version }}
           DOWNLOAD_DIR: ${{ env.DOWNLOAD_DIR }}
           GITHUB_REPO_URL: "https://github.com/${{ matrix.github_owner }}/${{ matrix.github_repo }}"
-        # ✅ 使用 bash 执行
         run: bash .github/workflows/scripts/release.sh
       
       - name: 保存版本信息
-        if: env.release_success == 'true'
+        if: steps.check.outputs.needs_update == 'true' && steps.release.outcome == 'success'
         run: |
           mkdir -p /tmp/version
           echo "${{ steps.check.outputs.local_name }}|${{ steps.check.outputs.version }}" > /tmp/version/update.txt
       
       - uses: actions/upload-artifact@v4
-        if: env.release_success == 'true'
+        if: steps.check.outputs.needs_update == 'true' && steps.release.outcome == 'success'
         with:
           name: version-${{ matrix.github_repo }}
           path: /tmp/version/update.txt
@@ -173,9 +174,15 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/status
-          status="❌ 失败"
-          [ "${{ steps.check.outputs.needs_update }}" != "true" ] && status="✅ 无需更新"
-          [ "${{ env.release_success }}" = "true" ] && status="✅ 已发布"
+          
+          # ✅ 修正判断逻辑
+          if [ "${{ steps.check.outputs.needs_update }}" != "true" ]; then
+            status="✅ 无需更新"
+          elif [ "${{ steps.release.outcome }}" = "success" ]; then
+            status="✅ 已发布"
+          else
+            status="❌ 失败"
+          fi
           
           cat > "/tmp/status/${{ matrix.github_repo }}.txt" <<EOF
           ${{ matrix.github_repo }}
@@ -218,7 +225,6 @@ jobs:
             [ -f "$file" ] || continue
             IFS='|' read -r name version < "$file"
             [ -n "$name" ] && [ -n "$version" ] && {
-              # ✅ 使用 bash 执行
               bash .github/workflows/scripts/version-manager.sh write "$name" "$version"
               echo "  ✓ $name → $version"
               updated=$((updated + 1))
