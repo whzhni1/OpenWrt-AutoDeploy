@@ -8,20 +8,22 @@
 # - filter_exclude: 排除文件规则，空格分隔（选填）
 # - filter_include: 包含文件规则，格式：pattern:数量（选填）
 # - filter_by_version: 是否只保留版本号匹配的文件（选填，默认 false）
-# - username: 覆盖全局用户名（选填）
 
 # 🌐 全局默认配置
 defaults:
   username: whzhni  # 默认用户名（所有平台通用）
-  branch: main      # 默认分支
-  platforms: gitcode gitee gitlab r2  # 默认平台
+  platforms: gitcode gitee gitlab r2  # 默认发布平台
+  R2_PUBLIC_URL: https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev # 你的Cloudflare R2存储桶公共开发 URL
+  # GITCODE_USERNAME: abc # 自定义gitcode用户名
+  # GITEE_USERNAME: def # 自定义gitee用户名
+  # GITLAB_USERNAME: cba # 自定义gitlab用户名
 
 # 📦 仓库配置
 repositories:
   - github_owner: vernesong
     github_repo: OpenClash
     local_name: luci-app-openclash
-    platforms: r2  # 覆盖全局平台设置
+    platforms: r2  # 只发布到Cloudflare r2
     
   - github_owner: whzhni1
     github_repo: luci-app-tailscale
