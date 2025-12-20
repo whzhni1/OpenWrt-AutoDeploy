@@ -9,7 +9,7 @@ PLATFORM="$PLATFORMS"
 # 如果是多个平台，循环处理
 if echo "$PLATFORMS" | grep -q ' '; then
   for plat in $PLATFORMS; do
-    "$0" "$plat"
+    bash "$0" "$plat"
   done
   exit 0
 fi
