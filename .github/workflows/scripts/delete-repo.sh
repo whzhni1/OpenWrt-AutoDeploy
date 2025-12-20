@@ -29,10 +29,11 @@ delete_platform() {
         
         if aws s3 rm "s3://$R2_BUCKET/$REPO_NAME/" --recursive --endpoint-url="$R2_ENDPOINT" 2>&1 | grep -q "delete:"; then
           echo "✅ 删除成功: R2"
+          return 0
         else
-          echo "⚠️  没有找到文件: R2"
+          echo "⚠️  删除失败或目录不存在: R2"
+          return 1
         fi
-        return 0
         ;;
       *)
         echo "❌ 未知平台: $PLATFORM"
@@ -51,24 +52,16 @@ delete_platform() {
     HTTP_CODE=$(echo "$RESP" | tail -1)
     BODY=$(echo "$RESP" | sed '$d')
     
-    if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "202" ] || [ "$HTTP_CODE" = "200" ]; then
+    if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "202" ]; then
       echo "✅ 删除成功: $PLATFORM"
       return 0
-    fi
-    
-    if [ "$HTTP_CODE" = "404" ]; then
-      echo "⚠️  仓库不存在: $PLATFORM（已跳过）"
+    elif [ "$HTTP_CODE" = "404" ]; then
+      echo "⚠️  仓库不存在: $PLATFORM"
       return 0
+    else
+      echo "❌ 删除失败: $PLATFORM (HTTP $HTTP_CODE): $BODY"
+      return 1
     fi
-    
-    if echo "$BODY" | jq -e '.error_code == 404' >/dev/null 2>&1; then
-      echo "⚠️  仓库不存在: $PLATFORM（已跳过）"
-      return 0
-    fi
-    
-    echo "❌ 删除失败: $PLATFORM (HTTP $HTTP_CODE)"
-    echo "   响应: $BODY"
-    return 1
 }
 
 # 主逻辑
@@ -103,8 +96,7 @@ main() {
         
         echo ""
         echo "📊 删除完成: 成功 $success, 失败 $failed"
-        
-        [ $failed -eq 0 ] && exit 0 || exit 1
+        [ $success -gt 0 ] && exit 0 || exit 1
     else
         delete_platform "$PLATFORMS"
     fi
