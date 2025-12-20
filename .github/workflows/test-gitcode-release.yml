@@ -70,6 +70,7 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+      
       - name: 构建平台列表
         id: platforms
         run: |
@@ -79,7 +80,6 @@ jobs:
           [ "${{ github.event.inputs.platform_gitlab }}" = "true" ] && platforms="$platforms gitlab"
           [ "${{ github.event.inputs.platform_r2 }}" = "true" ] && platforms="$platforms r2"
           
-          # 去除首尾空格
           platforms="${platforms## }"
           platforms="${platforms%% }"
           
