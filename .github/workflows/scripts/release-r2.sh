@@ -39,13 +39,11 @@ check_version() {
     local existing=$(curl -sf "$releases_url" 2>/dev/null || echo "")
     
     if [ -n "$existing" ]; then
-        # 检查是否包含当前版本
         if echo "$existing" | jq -e --arg tag "$TAG_NAME" '.[] | select(.tag_name == $tag)' >/dev/null 2>&1; then
             log "⏭️  版本 $TAG_NAME 已存在，跳过"
             return 1
         fi
         
-        # 删除所有版本目录（保留 releases）
         log "🧹 删除旧版本..."
         aws s3 ls "s3://$R2_BUCKET/$REPO_NAME/" --endpoint-url="$R2_ENDPOINT" | \
         awk '{print $2}' | grep -E '^v' | while read -r old_version; do
@@ -64,7 +62,7 @@ check_version() {
 upload_files() {
     log "📤 上传到 $REPO_NAME/$TAG_NAME/"
     
-    local releases='[]'
+    local assets='[]'
     local uploaded=0
     
     IFS=' ' read -ra files <<< "$UPLOAD_FILES"
@@ -79,11 +77,10 @@ upload_files() {
         log "  [$((uploaded + 1))/${#files[@]}] $name"
         
         if aws s3 cp "$file" "$s3_path" --endpoint-url="$R2_ENDPOINT" --no-progress >/dev/null 2>&1; then
-            releases=$(echo "$releases" | jq -c \
-                --arg tag "$TAG_NAME" \
-                --arg name "$name" \
-                --arg url "$public_url" \
-                '. += [{tag_name:$tag, name:$name, url:$url}]')
+            assets=$(echo "$assets" | jq -c \
+            --arg name "$name" \
+            --arg url "$public_url" \
+            '. += [{name:$name, url:$url}]')
             uploaded=$((uploaded + 1))
         else
             log "  ❌ 上传失败: $name"
@@ -94,9 +91,12 @@ upload_files() {
     
     log "✅ 已上传 $uploaded 个文件"
     
-    # 上传 releases 文件
     log "📝 更新 releases 文件..."
-    echo "$releases" | jq '.' > /tmp/releases
+    jq -n \
+    --arg tag "$TAG_NAME" \
+    --argjson count "$uploaded" \
+    --argjson assets "$assets" \
+    '[{tag_name:$tag, assets:{count:$count, files:$assets}}]' > /tmp/releases
     
     aws s3 cp /tmp/releases "s3://$R2_BUCKET/$REPO_NAME/releases" \
         --endpoint-url="$R2_ENDPOINT" \
