@@ -1,6 +1,6 @@
 #!/bin/sh
 
-SCRIPT_VERSION="2.3.0"
+SCRIPT_VERSION="2.3.1"
 LOG_FILE="/tmp/auto-update.log"
 CONFIG_FILE="/etc/auto-setup.conf"
 DEVICE_MODEL="$(cat /tmp/sysinfo/model 2>/dev/null || echo '未知设备')"
@@ -41,6 +41,7 @@ parse_git_info() {
     url="${input%%≈*}"
     token="${input#*≈}"
     [ "$token" = "$input" ] && token=""
+    case "$url" in *".r2.dev"*) platform="cloudflare"; owner=""; return ;; esac
     local norm="${url/raw.gitcode/gitcode}"
     norm="${norm/raw.githubusercontent.com/github.com}"
     platform=$(echo "$norm" | sed -n 's|.*://\([^.]*\)\..*|\1|p')
@@ -79,9 +80,12 @@ validate_file() {
 
 # API 调用
 api_get_release() {
-    local platform="$1" owner="$2" repo="$3" url header result
+    local platform="$1" owner="$2" repo="$3" header result
     
     case "$platform" in
+        cloudflare)
+            url="$(echo "$url" | sed "s|/auto-setup$|/${repo}/releases|")"
+            ;;
         gitlab)
             url="https://gitlab.com/api/v4/projects/${owner}%2F${repo}/releases"
             header="PRIVATE-TOKEN: $token"
@@ -96,7 +100,7 @@ api_get_release() {
             ;;
     esac
     
-    ([ -n "$token" ] && curl -s -H "$header" "$url" || curl -s "$url") | sed 's/": /":/g'
+    ([ -n "$token" ] && curl -s --connect-timeout 5  -H "$header" "$url" || curl -s --connect-timeout 5  "$url") | sed 's/": /":/g'
 }
 
 # 查找并安装
@@ -145,7 +149,7 @@ download_and_install() {
     [ -z "$url" ] && { log "✗ 无下载地址"; return 1; }
     
     log "    下载: $file"
-    curl -fsSL -o "/tmp/$file" "$url" || { log "⚠ 下载失败"; return 1; }
+    curl -fsSL --connect-timeout 5 --max-time 60 -o "/tmp/$file" "$url" || { log "⚠ 下载失败"; return 1; }
     
     validate_file "/tmp/$file" 10240 || { rm -f "/tmp/$file"; return 1; }
     
@@ -169,8 +173,7 @@ process_package() {
     
     for src in $SCRIPT_URLS; do
         parse_git_info "$src"
-        
-        local authors="${AUTHORS:-$owner}"
+        [ "$platform" = "cloudflare" ] && authors="R2" || authors="${AUTHORS:-$owner}"
         
         for author in $authors; do
             log "  尝试: $platform/$author/$pkg"
