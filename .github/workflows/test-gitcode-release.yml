@@ -70,7 +70,16 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
-      
+      - name: 读取 R2 配置
+        id: r2-config
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          
+          R2_PUBLIC_URL=$(yq eval '.defaults.R2_PUBLIC_URL' config/sync-config.yaml)
+          echo "url=$R2_PUBLIC_URL" >> $GITHUB_OUTPUT
+          echo "📡 R2_PUBLIC_URL: $R2_PUBLIC_URL"
+          
       - name: 构建平台列表
         id: platforms
         run: |
