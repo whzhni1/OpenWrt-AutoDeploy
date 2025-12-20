@@ -20,7 +20,7 @@ repositories:
   - github_owner: vernesong
     github_repo: OpenClash
     local_name: luci-app-openclash
-    platforms: r2  # 只发布到Cloudflare r2
+    platforms: gitlab r2  # 发布到Cloudflare r2和gitlab
     
   - github_owner: whzhni1
     github_repo: luci-app-tailscale
@@ -37,9 +37,11 @@ repositories:
     github_repo: openwrt-passwall
     local_name: luci-app-passwall
     filter_exclude: luci-19.07* *.zip
+    platforms: gitlab r2
 
   - github_owner: xiaorouji
     github_repo: openwrt-passwall2
     local_name: luci-app-passwall2
     filter_exclude: luci-19.07* *.zip
+    platforms: gitlab r2
     
