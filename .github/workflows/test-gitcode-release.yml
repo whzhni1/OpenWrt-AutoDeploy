@@ -70,6 +70,7 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+      
       - name: 读取 R2 配置
         id: r2-config
         run: |
@@ -79,7 +80,7 @@ jobs:
           R2_PUBLIC_URL=$(yq eval '.defaults.R2_PUBLIC_URL' config/sync-config.yaml)
           echo "url=$R2_PUBLIC_URL" >> $GITHUB_OUTPUT
           echo "📡 R2_PUBLIC_URL: $R2_PUBLIC_URL"
-          
+      
       - name: 构建平台列表
         id: platforms
         run: |
@@ -127,7 +128,7 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
-          R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          R2_PUBLIC_URL: ${{ steps.r2-config.outputs.url }}
           DOWNLOAD_DIR: ${{ github.workspace }}
           GITHUB_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
@@ -170,6 +171,7 @@ jobs:
           | 操作 | ${{ github.event.inputs.action }} |
           | 项目 | \`${{ env.USERNAME }}/${{ env.REPO_NAME }}\` |
           | 标签 | \`${{ env.TAG_NAME }}\` |
+          | R2 URL | ${{ steps.r2-config.outputs.url }} |
           | 状态 | ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }} |
           
           ## 📦 测试平台
