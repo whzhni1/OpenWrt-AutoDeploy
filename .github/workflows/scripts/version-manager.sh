@@ -76,7 +76,7 @@ write_version() {
     local temp_file="${VERSION_FILE}.tmp"
     
     if grep -q "^${name}|" "$VERSION_FILE" 2>/dev/null; then
-        sed "s|^${name}|.*|${name}|${version}|" "$VERSION_FILE" > "$temp_file"
+        sed "s#^${name}|.*#${name}|${version}#" "$VERSION_FILE" > "$temp_file"
         mv "$temp_file" "$VERSION_FILE"
         echo "✓ 更新: ${name} → ${version}" >&2
     else
