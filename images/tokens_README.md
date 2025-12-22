@@ -87,6 +87,28 @@
 
 ---
 
+## cloudflare_R2令牌创建令牌步骤
+
+### 1. 登录cloudflare
+访问 [dash.cloudflare.com](https://dash.cloudflare.com)
+
+### 2. 进入存储和数据库
+- 在左侧点击存储和数据库
+- 选择R2对象存储
+- 选择概述
+
+### 3. 创建存储桶
+- 名称必须是`openwrt-autodeploy`否则影响后续操作
+- 位置可以选择亚太地区
+- 默认存储类选择标准
+
+### 4. 创建R2_SECRET_KEY，R2_ACCESS_KEY
+- 注意`Account Details`区域的Account ID复制对应变量名R2_ACCOUNT_ID
+- 点击Manage
+- 创建 Account API 令牌
+- 名称随意，权限必须选择 管理员读和写，TTL永久
+- 然后复制访问密钥对应变量名R2_ACCESS_KEY，机密访问密钥对应变量名R2_SECRET_KEY
+
 ## 重要提醒
 
 1. **令牌安全**：创建的令牌具有很高的权限，请妥善保管，不要泄露
@@ -96,5 +118,8 @@
    - `GITEE_TOKEN` = Gitee 私人令牌
    - `GITCODE_TOKEN` = GitCode 访问令牌  
    - `GITLAB_TOKEN` = GitLab 个人访问令牌
+   - **Name**: `R2_ACCOUNT_ID`，**Secret**: cloudflare_R2的Account ID 
+   - **Name**: `R2_ACCESS_KEY`，**Secret**: cloudflare_R2访问密钥
+   - **Name**: `R2_SECRET_KEY`，**Secret**: cloudflare_R2机密访问密
 
 完成以上步骤后，即可正常运行 GitHub Actions 工作流进行多平台同步。
