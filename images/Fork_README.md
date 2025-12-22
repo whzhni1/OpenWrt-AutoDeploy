@@ -2,14 +2,10 @@
 ## Fork本项目后需要做些什么？
 
 ### 1. 修改工作流文件中的用户名
-修改 `.github/workflows/` 目录下的所有工作流文件，将 `whzhni` 替换为你自己的 对应平台的 用户名。
+修改 `config/sync-config.yaml` 文件默认用户名，将`R2_PUBLIC_URL`地址替换成你的cloudflareR2公开地址。
 
-### 2. 注意同步配置
-特别注意 `sync-upstream-releases.yml` 文件中的配置：
-
-- {github_owner: "whzhni1", github_repo: "luci-app-tailscale", local_name: "tailscale"}
-
-⚠️ **注意**：`whzhni1` 这个用户名不能修改。
+### 2. 删除 version.txt 文件
+如果不删除首次运行工作流时勾选强制同步
 
 ### 3. 注册代码托管平台并配置令牌
 
@@ -18,6 +14,7 @@
 - [gitee](https://gitee.com)
 - [gitcode](https://gitcode.com) 
 - [gitlab](https://gitlab.com)
+- [Cloudflare](https://dash.cloudflare.com)
 
 在创建令牌时，请勾选所有权限，然后复制令牌备用，- [创建令牌指南](./tokens_README.md)。
 
@@ -26,10 +23,13 @@
 1. 点击 `Settings` →`Actions→General`→`Read and write permissions`→`Allow GitHub Actions to create and approve pull requests` →`Save`
 2. 点击`Secrets and variables` → `Actions`
 3. 点击 `New repository secret`
-4. 分别添加以下三个 secret：
+4. 按需要分别添加以下 secret：
    - **Name**: `GITCODE_TOKEN`，**Secret**: 你的 gitcode 访问令牌
    - **Name**: `GITEE_TOKEN`，**Secret**: 你的 gitee 访问令牌  
    - **Name**: `GITLAB_TOKEN`，**Secret**: 你的 gitlab 访问令牌
+   - **Name**: `R2_ACCOUNT_ID`，**Secret**: cloudflare_R2的Account ID 
+   - **Name**: `R2_ACCESS_KEY`，**Secret**: cloudflare_R2访问密钥
+   - **Name**: `R2_SECRET_KEY`，**Secret**: cloudflare_R2机密访问密钥
 
 #### 3.3 测试 Release 工作流
 1. 点击 Actions
@@ -39,8 +39,9 @@
 
 #### 3.4 同步上游插件
 运行 `同步上游发布插件` 工作流，系统将：
-- 批量同步多个插件到 gitcode、gitee、gitlab
+- 批量同步多个插件到 gitcode、gitee、gitlab、cloudflare_R2
 - 自动创建仓库并发布 Releases
+- 当有新版本时自动删除旧版本
 
 
 # 插件配置参数说明 不是必须设置可按需要修改
@@ -55,13 +56,3 @@
 | filter_include | 字符串   | 包含过滤规则 | 只保留匹配的文件         |
 | filter_exclude | 字符串   | 排除过滤规则 | 排除匹配的文件           |
 
-## 插件配置示例表格
-
-| 插件名     | 配置实例                                                                         | 匹配说明                                                                 |
-|------------|----------------------------------------------------------------------------------|--------------------------------------------------------------------------|
-| OpenClash  | `{github_owner: "vernesong", github_repo: "OpenClash", local_name: "luci-app-openclash"}` | 无过滤，同步所有文件                                                     |
-| Tailscale  | `{github_owner: "whzhni1", github_repo: "luci-app-tailscale", local_name: "tailscale"}`   | 名称转为 tailscale，同步所有文件                                         |
-| Lucky      | `{github_owner: "gdy666", github_repo: "luci-app-lucky", local_name: "lucky", filter_include: "luci-app-*:1 luci-i18n-*:1 *{VERSION}*wanji*"}` | 名称转为 lucky，匹配1个luci-app，1个luci-i18n，匹配最新版本含wanji的文件 |
-| Aurora     | `{github_owner: "eamonxg", github_repo: "luci-theme-aurora"}`                            | 无过滤，使用默认名称，同步所有文件                                       |
-| Passwall   | `{github_owner: "xiaorouji", github_repo: "openwrt-passwall", local_name: "luci-app-passwall", filter_exclude: "luci-19.07* *.zip"}` | 名称转为 luci-app-passwall，排除19.07版本和zip文件                       |
-| Passwall2  | `{github_owner: "xiaorouji", github_repo: "openwrt-passwall2", local_name: "luci-app-passwall2", filter_exclude: "luci-19.07* *.zip"}` | 名称转为 luci-app-passwall2，排除19.07版本和zip文件                      |
