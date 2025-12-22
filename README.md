@@ -25,7 +25,7 @@
 ### 🌐 多平台分发优势
 
 通过 GitHub Actions 自动从各大仓库拉取插件并发布到多个平台：
-- **GitLab**、**Gitee**、**GitCode** **cloudflare R2**- 国内用户无需梯子即可高速下载
+- **GitLab**、**Gitee**、**GitCode** **cloudflare_R2** - 国内用户无需梯子即可高速下载
 - **版本控制**：自定义标签命名，版本比官方源更新更快
 - **格式统一**：标准化包格式，确保兼容性
 ## [查看截图](./images/README.md)
