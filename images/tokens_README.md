@@ -110,7 +110,7 @@
 - 然后复制访问密钥对应变量名R2_ACCESS_KEY，机密访问密钥对应变量名R2_SECRET_KEY
 
 ### 5. 创建公开访问链接
-– 进入创建的存储桶openwrt-autodeploy
+- 进入创建的存储桶openwrt-autodeploy
 - 设置
 - 公共开发 URL
 - 启用
