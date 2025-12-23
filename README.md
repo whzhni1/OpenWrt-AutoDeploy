@@ -42,7 +42,7 @@ wget -q -O - "https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup
 1. 体验完成自动清理无须手动清理
 2. 两分钟后退出路由器web界面重新进入或在tmp目录找到auto-setup-fetch.log查看日志
 
-## 配置说明 ⚙️
+## auto-setup-fetch配置说明 ⚙️
 |参数名 |	属性 |  用法     |	作用  |  说明
 |------|--------|-----------|----------|--------|
 |INSTALL_PRIORITY|可选	|INSTALL_PRIORITY="1"	|设置安装策略	|1=第三方源优先，其他值或空值=官方源优先|
