@@ -250,7 +250,7 @@ jobs:
               updated=$((updated + 1))
             }
           done
-          [ $updated -gt 0 ] && echo "need_push=true" >> $GITHUB_ENV
+          [ $updated -gt 0 ] && echo "need_push=true" >> $GITHUB_ENV || true
       
       - name: 推送版本记录
         if: env.need_push == 'true'
