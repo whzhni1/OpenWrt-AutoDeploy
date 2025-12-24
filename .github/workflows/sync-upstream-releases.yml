@@ -97,9 +97,33 @@ jobs:
           VERSION_NO_V="${VERSION#v}"
           DOWNLOAD_DIR="${{ runner.temp }}/downloads"
           mkdir -p "$DOWNLOAD_DIR"
+          all_assets=$(jq -r '.assets[] | "\(.browser_download_url)|\(.name)"' /tmp/release.json)
+          direct_files=""
+          archive_files=""
           
-          # 过滤文件列表
-          all_files=$(jq -r '.assets[] | "\(.browser_download_url)|\(.name)"' /tmp/release.json)
+          while IFS='|' read -r url filename; do
+            [ -z "$url" ] && continue
+            case "${filename,,}" in
+              *.ipk|*.apk)
+                direct_files+="$url|$filename"$'\n'
+                ;;
+              *.zip|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.7z|*.rar)
+                archive_files+="$url|$filename"$'\n'
+                ;;
+            esac
+          done <<< "$all_assets"
+          if [ -n "$direct_files" ]; then
+            echo "📦 模式: ipk/apk"
+            all_files="$direct_files"
+          elif [ -n "$archive_files" ]; then
+            echo "📦 模式: 压缩包"
+            all_files="$archive_files"
+          else
+            echo "⚠️ 未找到可用文件"
+            exit 0
+          fi
+          
+          total_count=$(echo "$all_files" | grep -c '|' || echo 0)
           filtered_files=""
           
           if [ -n "${{ matrix.filter_include }}" ]; then
@@ -149,11 +173,8 @@ jobs:
           fi
           
           file_count=$(echo "$filtered_files" | grep -c '|' || echo 0)
-          echo "📦 过滤: $(jq '.assets|length' /tmp/release.json) → $file_count 个文件"
-          
+          echo "📊 过滤: $total_count → $file_count 个文件" 
           [ $file_count -eq 0 ] && exit 0
-          
-          # 下载文件
           downloaded=0
           while IFS='|' read -r url filename; do
             [ -z "$url" ] && continue
@@ -161,7 +182,7 @@ jobs:
           done <<< "$filtered_files"
           
           echo "✅ 下载: $downloaded 个文件"
-          echo "DOWNLOAD_DIR=$DOWNLOAD_DIR" >> $GITHUB_ENV
+          [ $downloaded -gt 0 ] && echo "DOWNLOAD_DIR=$DOWNLOAD_DIR" >> $GITHUB_ENV || true
       
       - name: 并行发布
         id: release
