@@ -103,13 +103,10 @@ jobs:
         run: |
           set -e
           mkdir -p output
-
           VERSION="${{ matrix.project.version }}"
           NAME="${{ matrix.project.local_name }}"
           OWNER="${{ matrix.project.github_owner }}"
           REPO="${{ matrix.project.github_repo }}"
-
-          # 上游架构 → OpenWrt 架构映射
           get_targets() {
             case "$1" in
               aarch64) echo "aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic" ;;
@@ -123,24 +120,14 @@ jobs:
             esac
           }
 
-          echo "$ASSETS" | while IFS= read -r asset; do
-            [ -z "$asset" ] && continue
-            
-            # 只处理 Linux musl
+            for asset in $ASSETS; do
             case "$asset" in *-unknown-linux-musl*.tar.gz) ;; *) continue ;; esac
-
-            # 用 cut 提取架构（第2段）: vnt-aarch64-unknown... → aarch64
             UPSTREAM_ARCH=$(echo "$asset" | cut -d'-' -f2)
-            
             TARGETS=$(get_targets "$UPSTREAM_ARCH")
             [ -z "$TARGETS" ] && { echo "跳过: $UPSTREAM_ARCH"; continue; }
-
             echo "📦 $asset → $UPSTREAM_ARCH"
-
             wget -q "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${asset}" -O bin.tar.gz || continue
-
             mkdir -p tmp_bin && tar -xf bin.tar.gz -C tmp_bin
-
             for T in $TARGETS; do
               mkdir -p pkg/usr/bin pkg/CONTROL
               find tmp_bin -type f -exec cp {} pkg/usr/bin/ \;
