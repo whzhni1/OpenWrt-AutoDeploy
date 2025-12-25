@@ -1,4 +1,4 @@
-name: 构建 VNT / VNTS
+name: 构建 VNT / VNTS / LuCI
 
 on:
   schedule:
@@ -17,11 +17,12 @@ jobs:
       matrix: ${{ steps.matrix.outputs.value }}
       has_updates: ${{ steps.matrix.outputs.has_updates }}
       defaults: ${{ steps.read-config.outputs.defaults }}
+      vnt_version: ${{ steps.matrix.outputs.vnt_version }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 读取全局配置
+      - name: 读取配置
         id: read-config
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
@@ -29,7 +30,7 @@ jobs:
           defaults=$(yq eval '.defaults' config/sync-config.yaml -o=json -I=0)
           echo "defaults=$defaults" >> $GITHUB_OUTPUT
 
-      - name: 检查更新
+      - name: 检查 VNT / VNTS 上游版本
         id: matrix
         run: |
           PROJECTS='[
@@ -38,6 +39,7 @@ jobs:
           ]'
 
           UPDATES='[]'
+          VNT_VER=""
 
           while read -r proj; do
             owner=$(echo "$proj" | jq -r '.github_owner')
@@ -55,19 +57,25 @@ jobs:
               UPDATES=$(echo "$UPDATES" | jq -c \
                 --arg o "$owner" --arg r "$repo" --arg n "$name" --arg v "$latest" \
                 '. += [{github_owner:$o, github_repo:$r, local_name:$n, version:$v}]')
+
+              if [ "$name" = "vnt" ]; then
+                VNT_VER="$latest"
+              fi
             fi
           done < <(echo "$PROJECTS" | jq -c '.[]')
 
           if [ "$UPDATES" = "[]" ]; then
             echo "has_updates=false" >> $GITHUB_OUTPUT
-            echo "value={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo 'value={"include":[]}' >> $GITHUB_OUTPUT
           else
             echo "has_updates=true" >> $GITHUB_OUTPUT
             echo "value={\"include\":$UPDATES}" >> $GITHUB_OUTPUT
           fi
 
-  build:
-    name: ${{ matrix.project.local_name }}-${{ matrix.arch }}-${{ matrix.sdk }}
+          echo "vnt_version=$VNT_VER" >> $GITHUB_OUTPUT
+
+  build-binary:
+    name: 打包二进制 ${{ matrix.project.local_name }}
     runs-on: ubuntu-latest
     needs: check-updates
     if: needs.check-updates.outputs.has_updates == 'true'
@@ -76,72 +84,148 @@ jobs:
       fail-fast: false
       matrix:
         project: ${{ fromJson(needs.check-updates.outputs.matrix).include }}
-        arch:
-         - aarch64_cortex-a53
-         - aarch64_cortex-a72
-         - aarch64_cortex-a76
-         - aarch64_generic
-         - arm_arm1176jzf-s_vfp
-         - arm_cortex-a5_vfpv4
-         - arm_cortex-a7
-         - arm_cortex-a7_neon-vfpv4
-         - arm_cortex-a7_vfpv4
-         - arm_cortex-a8_vfpv3
-         - arm_cortex-a9
-         - arm_cortex-a9_neon
-         - arm_cortex-a9_vfpv3-d16
-         - arm_cortex-a15_neon-vfpv4
-         - arm_fa526
-         - arm_mpcore
-         - arm_xscale
-         - i386_pentium-mmx
-         - i386_pentium4
-         - mips_24kc
-         - mips_mips32
-         - mipsel_24kc
-         - mipsel_24kc_24kf
-         - mipsel_74kc
-         - mipsel_mips32
-         - x86_64
-        sdk: [openwrt-24.10, SNAPSHOT]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 克隆 luci-app-vnt
+      - name: 获取上游 assets 列表
+        id: assets
         run: |
-          git clone https://github.com/lmq8267/luci-app-vnt luci
+          ASSETS=$(curl -s "https://api.github.com/repos/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}/releases/latest" \
+            | jq -r '.assets[].name')
+          echo "assets<<EOF" >> $GITHUB_OUTPUT
+          echo "$ASSETS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: 修改 Makefile 版本号
+      - name: 自动打包 VNT/VNTS IPK / APK（动态架构）
         run: |
-          if [ "${{ matrix.project.local_name }}" = "vnt" ]; then
-            sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ matrix.project.version }}/" luci/vnt/Makefile
-          fi
+          set -e
+          mkdir -p output
 
-          if [ "${{ matrix.project.local_name }}" = "vnts" ]; then
-            sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ matrix.project.version }}/" luci/vnts/Makefile
-          fi
+          VERSION="${{ matrix.project.version }}"
+          NAME="${{ matrix.project.local_name }}"
 
-      - name: 构建软件包
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: vnt vnts luci-app-vnt
-          NO_REFRESH_CHECK: true
+          for asset in ${{ steps.assets.outputs.assets }}; do
+            case "$asset" in
+              *unknown-linux-musl*.tar.gz)
+                ARCH=$(echo "$asset" | sed -E 's/.*-([^-]+)-unknown-linux-musl.*\.tar\.gz/\1/')
+                ;;
+              *)
+                continue
+                ;;
+            esac
+
+            echo "处理架构: $ARCH"
+
+            URL="https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}/releases/download/v${VERSION}/${asset}"
+            wget -q "$URL" -O bin.tar.gz || { echo "下载失败，跳过 $asset"; rm -f bin.tar.gz; continue; }
+
+            mkdir -p pkg/usr/bin pkg/CONTROL
+
+            tar -xf bin.tar.gz -C pkg/usr/bin
+
+            cat > pkg/CONTROL/control <<EOF
+Package: $NAME
+Version: $VERSION
+Architecture: $ARCH
+Description: $NAME binary package (repacked)
+Section: net
+Priority: optional
+Maintainer: Automated Build <https://github.com/${{ github.repository }}>
+Source: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
+EOF
+
+            echo '2.0' > debian-binary
+
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C pkg/CONTROL .
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg/usr .
+
+            ar r "output/${NAME}_${VERSION}_${ARCH}.ipk" control.tar.gz data.tar.gz debian-binary
+
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "output/${NAME}-${VERSION}.${ARCH}.apk" -C pkg .
+
+            rm -rf pkg control.tar.gz data.tar.gz bin.tar.gz debian-binary
+          done
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.project.local_name }}-${{ matrix.arch }}-${{ matrix.sdk }}
-          path: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
-          retention-days: 1
+          name: ${{ matrix.project.local_name }}-bin
+          path: output/*
+          if-no-files-found: error
+          retention-days: 3
+
+  build-luci:
+    name: 打包 LuCI
+    runs-on: ubuntu-latest
+    needs: check-updates
+    if: needs.check-updates.outputs.vnt_version != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 克隆 luci-app-vnt 源码
+        run: |
+          git clone https://github.com/lmq8267/luci-app-vnt luci-app-vnt
+
+      - name: 读取 LuCI PKG_VERSION
+        id: luci_ver
+        run: |
+          MAKEFILE="luci-app-vnt/luci-app-vnt/Makefile"
+          PKG_VERSION=$(grep -E '^PKG_VERSION[:=]' "$MAKEFILE" | head -n1 | sed -E 's/.*[:=]\s*//')
+          echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
+          echo "LuCI 版本号: $PKG_VERSION"
+
+      - name: 打包 luci-app-vnt 为 IPK / APK
+        run: |
+          set -e
+          VERSION="${{ steps.luci_ver.outputs.version }}"
+          NAME="luci-app-vnt"
+          mkdir -p pkg/CONTROL
+          mkdir -p pkg/usr/lib/lua/luci
+          mkdir -p pkg/www
+          mkdir -p output
+          if [ -d "luci-app-vnt/luci-app-vnt/luasrc" ]; then
+            cp -R luci-app-vnt/luci-app-vnt/luasrc/* pkg/usr/lib/lua/luci/
+          fi
+          if [ -d "luci-app-vnt/luci-app-vnt/htdocs" ]; then
+            cp -R luci-app-vnt/luci-app-vnt/htdocs/* pkg/www/
+          fi
+          if [ -d "luci-app-vnt/luci-app-vnt/root" ]; then
+            cp -R luci-app-vnt/luci-app-vnt/root/* pkg/
+          fi
+          cat > pkg/CONTROL/control <<EOF
+Package: $NAME
+Version: $VERSION
+Architecture: all
+Description: LuCI support for VNT (Virtual Network Tunnel)
+Section: luci
+Priority: optional
+Maintainer: Automated Build <https://github.com/${{ github.repository }}>
+Source: https://github.com/lmq8267/luci-app-vnt
+EOF
+
+          echo '2.0' > debian-binary
+
+          tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C pkg/CONTROL .
+          tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg .
+
+          ar r "output/${NAME}_${VERSION}_all.ipk" control.tar.gz data.tar.gz debian-binary
+
+          tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "output/${NAME}-${VERSION}.all.apk" -C pkg .
+
+          rm -rf pkg control.tar.gz data.tar.gz debian-binary
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-vnt
+          path: output/*
+          if-no-files-found: error
+          retention-days: 3
+
 
   release:
-    name: 发布 ${{ matrix.project.local_name }}
+    name: 多平台发布 ${{ matrix.project.local_name }}
     runs-on: ubuntu-latest
-    needs: [check-updates, build]
+    needs: [check-updates, build-binary, build-luci]
     if: needs.check-updates.outputs.has_updates == 'true'
 
     strategy:
@@ -156,19 +240,27 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: ${{ matrix.project.local_name }}-*
           path: ${{ runner.temp }}/artifacts
           merge-multiple: false
 
-      - name: 整理文件
+      - name: 整理发布文件
         run: |
-          RELEASE_DIR="${{ runner.temp }}/release"
+          RELEASE_DIR="${{ runner.temp }}/release/${{ matrix.project.local_name }}"
           mkdir -p "$RELEASE_DIR"
-          find "${{ runner.temp }}/artifacts" -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} "$RELEASE_DIR/" \;
-          echo "📦 已收集的软件包:"
-          echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
+          find "${{ runner.temp }}/artifacts" -type f \
+            \( -name "${{ matrix.project.local_name }}_*.ipk" -o -name "${{ matrix.project.local_name }}-*.apk" \) \
+            -exec cp {} "$RELEASE_DIR/" \;
+          if [ "${{ matrix.project.local_name }}" = "vnt" ]; then
+            find "${{ runner.temp }}/artifacts" -type f \
+              \( -name "luci-app-vnt_*.ipk" -o -name "luci-app-vnt-*.apk" \) \
+              -exec cp {} "$RELEASE_DIR/" \;
+          fi
 
-      - name: 多平台发布
+          echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
+          echo "📦 收集到的文件:"
+          ls -lh "$RELEASE_DIR" || true
+
+      - name: 多平台发布（OpenList release.sh）
         env:
           USERNAME: ${{ fromJSON(needs.check-updates.outputs.defaults).username }}
           PLATFORMS: ${{ fromJSON(needs.check-updates.outputs.defaults).platforms }}
@@ -186,8 +278,11 @@ jobs:
           DOWNLOAD_DIR: ${{ env.RELEASE_DIR }}
           GITHUB_REPO_URL: "https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}"
         run: |
-          export UPLOAD_FILES="$(find "$DOWNLOAD_DIR" -type f -name '*.ipk' -o -name '*.apk' | tr '\n' ' ')"
-          export RELEASE_BODY="## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }}"
+          set -e
+          export UPLOAD_FILES="$(find "$DOWNLOAD_DIR" -type f \( -name '*.ipk' -o -name '*.apk' \) | tr '\n' ' ')"
+          export RELEASE_BODY="## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }} 自动构建
+- 源仓库: $GITHUB_REPO_URL
+- 构建仓库: https://github.com/${{ github.repository }}"
 
           bash .github/workflows/scripts/release.sh
 
@@ -198,4 +293,4 @@ jobs:
           bash .github/workflows/scripts/version-manager.sh write "${{ matrix.project.local_name }}" "${{ matrix.project.version }}"
           git add config/version.txt
           git commit -m "更新版本 ${{ matrix.project.local_name }} → ${{ matrix.project.version }}" || true
-          git push
+          git push || true
