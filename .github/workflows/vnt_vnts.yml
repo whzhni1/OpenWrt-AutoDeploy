@@ -107,31 +107,52 @@ jobs:
           VERSION="${{ matrix.project.version }}"
           NAME="${{ matrix.project.local_name }}"
 
+          # 上游架构 → OpenWrt 架构映射
+          get_targets() {
+            case "$1" in
+              aarch64) echo "aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic" ;;
+              armv7)   echo "arm_arm1176jzf-s_vfp arm_cortex-a5_vfpv4 arm_cortex-a7 arm_cortex-a7_neon-vfpv4 arm_cortex-a7_vfpv4 arm_cortex-a8_vfpv3 arm_cortex-a9 arm_cortex-a9_neon arm_cortex-a9_vfpv3-d16 arm_cortex-a15_neon-vfpv4 arm_fa526 arm_mpcore arm_xscale" ;;
+              x86_64)  echo "x86_64" ;;
+              i686)    echo "i386_pentium-mmx i386_pentium4" ;;
+              mips)    echo "mips_24kc mips_mips32" ;;
+              mipsel)  echo "mipsel_24kc mipsel_24kc_24kf mipsel_74kc mipsel_mips32" ;;
+              *) echo "" ;;
+            esac
+          }
+
           echo "$ASSETS" | while IFS= read -r asset; do
             [ -z "$asset" ] && continue
             
             case "$asset" in
               *unknown-linux-musl*.tar.gz)
-                ARCH=$(echo "$asset" | sed -E 's/.*-([^-]+)-unknown-linux-musl.*\.tar\.gz/\1/')
+                UPSTREAM_ARCH=$(echo "$asset" | sed -E 's/.*[-_]([a-z0-9_]+)-unknown-linux-musl.*\.tar\.gz/\1/')
                 ;;
               *)
                 continue
                 ;;
             esac
 
-            echo "处理架构: $ARCH"
+            TARGETS=$(get_targets "$UPSTREAM_ARCH")
+            [ -z "$TARGETS" ] && { echo "跳过未知架构: $UPSTREAM_ARCH"; continue; }
+
+            echo "处理: $asset → $TARGETS"
 
             URL="https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}/releases/download/v${VERSION}/${asset}"
-            wget -q "$URL" -O bin.tar.gz || { echo "下载失败，跳过 $asset"; rm -f bin.tar.gz; continue; }
+            wget -q "$URL" -O bin.tar.gz || { echo "下载失败"; continue; }
 
-            mkdir -p pkg/usr/bin pkg/CONTROL
+            mkdir -p tmp_bin
+            tar -xf bin.tar.gz -C tmp_bin
 
-            tar -xf bin.tar.gz -C pkg/usr/bin
+            for TARGET in $TARGETS; do
+              mkdir -p pkg/usr/bin pkg/CONTROL
 
-            cat > pkg/CONTROL/control <<EOF
+              find tmp_bin -type f -exec cp {} pkg/usr/bin/ \;
+              chmod +x pkg/usr/bin/*
+
+              cat > pkg/CONTROL/control <<EOF
           Package: $NAME
           Version: $VERSION
-          Architecture: $ARCH
+          Architecture: $TARGET
           Description: $NAME binary package (repacked)
           Section: net
           Priority: optional
@@ -139,17 +160,22 @@ jobs:
           Source: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
           EOF
 
-            echo '2.0' > debian-binary
+              echo '2.0' > debian-binary
+              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C pkg/CONTROL .
+              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg usr
 
-            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C pkg/CONTROL .
-            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg/usr .
+              ar r "output/${NAME}_${VERSION}_${TARGET}.ipk" debian-binary control.tar.gz data.tar.gz
+              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "output/${NAME}-${VERSION}.${TARGET}.apk" -C pkg .
 
-            ar r "output/${NAME}_${VERSION}_${ARCH}.ipk" control.tar.gz data.tar.gz debian-binary
+              echo "✅ ${NAME}_${VERSION}_${TARGET}.ipk"
+              rm -rf pkg control.tar.gz data.tar.gz debian-binary
+            done
 
-            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "output/${NAME}-${VERSION}.${ARCH}.apk" -C pkg .
-
-            rm -rf pkg control.tar.gz data.tar.gz bin.tar.gz debian-binary
+            rm -rf tmp_bin bin.tar.gz
           done
+
+          echo "📦 生成的包:"
+          ls -1 output/
 
       - uses: actions/upload-artifact@v4
         with:
