@@ -1,0 +1,174 @@
+name: 构建 VNT / VNTS
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制重新构建'
+        type: boolean
+        default: false
+
+jobs:
+  check-updates:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+      has_updates: ${{ steps.matrix.outputs.has_updates }}
+      defaults: ${{ steps.read-config.outputs.defaults }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取全局配置
+        id: read-config
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          defaults=$(yq eval '.defaults' config/sync-config.yaml -o=json -I=0)
+          echo "defaults=$defaults" >> $GITHUB_OUTPUT
+
+      - name: 检查更新
+        id: matrix
+        run: |
+          PROJECTS='[
+            {"github_owner":"vnt-dev","github_repo":"vnt","local_name":"vnt"},
+            {"github_owner":"vnt-dev","github_repo":"vnts","local_name":"vnts"}
+          ]'
+
+          UPDATES='[]'
+
+          while read -r proj; do
+            owner=$(echo "$proj" | jq -r '.github_owner')
+            repo=$(echo "$proj" | jq -r '.github_repo')
+            name=$(echo "$proj" | jq -r '.local_name')
+
+            latest=$(curl -s "https://api.github.com/repos/$owner/$repo/releases/latest" | jq -r '.tag_name // empty')
+            latest=${latest#v}
+
+            [ -z "$latest" ] && continue
+
+            local=$(bash .github/workflows/scripts/version-manager.sh read "$name" 2>/dev/null || echo "")
+
+            if [ -z "$local" ] || [ "$local" != "$latest" ] || [ "${{ inputs.force_build }}" = "true" ]; then
+              UPDATES=$(echo "$UPDATES" | jq -c \
+                --arg o "$owner" --arg r "$repo" --arg n "$name" --arg v "$latest" \
+                '. += [{github_owner:$o, github_repo:$r, local_name:$n, version:$v}]')
+            fi
+          done < <(echo "$PROJECTS" | jq -c '.[]')
+
+          if [ "$UPDATES" = "[]" ]; then
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+            echo "value={\"include\":[]}" >> $GITHUB_OUTPUT
+          else
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            echo "value={\"include\":$UPDATES}" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: ${{ matrix.project.local_name }}-${{ matrix.arch }}-${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    needs: check-updates
+    if: needs.check-updates.outputs.has_updates == 'true'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.check-updates.outputs.matrix).include }}
+        arch: [aarch64_cortex-a53, aarch64_cortex-a72, aarch64_generic, arm_cortex-a7, arm_cortex-a9, x86_64]
+        sdk: [openwrt-24.10, SNAPSHOT]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 克隆 luci-app-vnt
+        run: |
+          git clone https://github.com/lmq8267/luci-app-vnt luci
+
+      - name: 修改 Makefile 版本号
+        run: |
+          if [ "${{ matrix.project.local_name }}" = "vnt" ]; then
+            sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ matrix.project.version }}/" luci/vnt/Makefile
+          fi
+
+          if [ "${{ matrix.project.local_name }}" = "vnts" ]; then
+            sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${{ matrix.project.version }}/" luci/vnts/Makefile
+          fi
+
+      - name: 构建软件包
+        uses: sbwml/openwrt-gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: vnt vnts luci-app-vnt
+          NO_REFRESH_CHECK: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project.local_name }}-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: |
+            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+            bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
+          retention-days: 1
+
+  release:
+    name: 发布 ${{ matrix.project.local_name }}
+    runs-on: ubuntu-latest
+    needs: [check-updates, build]
+    if: needs.check-updates.outputs.has_updates == 'true'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.check-updates.outputs.matrix).include }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ matrix.project.local_name }}-*
+          path: ${{ runner.temp }}/artifacts
+          merge-multiple: false
+
+      - name: 整理文件
+        run: |
+          RELEASE_DIR="${{ runner.temp }}/release"
+          mkdir -p "$RELEASE_DIR"
+          cp -r ${{ runner.temp }}/artifacts/*/* "$RELEASE_DIR"
+          echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
+
+      - name: 多平台发布
+        env:
+          USERNAME: ${{ fromJSON(needs.check-updates.outputs.defaults).username }}
+          PLATFORMS: ${{ fromJSON(needs.check-updates.outputs.defaults).platforms }}
+          R2_PUBLIC_URL: ${{ fromJSON(needs.check-updates.outputs.defaults).R2_PUBLIC_URL }}
+
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+
+          REPO_NAME: ${{ matrix.project.local_name }}
+          TAG_NAME: ${{ matrix.project.version }}
+          DOWNLOAD_DIR: ${{ env.RELEASE_DIR }}
+          GITHUB_REPO_URL: "https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}"
+        run: |
+          export UPLOAD_FILES="$(find "$DOWNLOAD_DIR" -type f -name '*.ipk' -o -name '*.apk' | tr '\n' ' ')"
+          export RELEASE_BODY="## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }}"
+
+          bash .github/workflows/scripts/release.sh
+
+      - name: 更新版本记录
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          bash .github/workflows/scripts/version-manager.sh write "${{ matrix.project.local_name }}" "${{ matrix.project.version }}"
+          git add config/version.txt
+          git commit -m "更新版本 ${{ matrix.project.local_name }} → ${{ matrix.project.version }}" || true
+          git push
