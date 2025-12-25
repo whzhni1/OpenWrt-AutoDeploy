@@ -125,15 +125,15 @@ jobs:
             tar -xf bin.tar.gz -C pkg/usr/bin
 
             cat > pkg/CONTROL/control <<EOF
-Package: $NAME
-Version: $VERSION
-Architecture: $ARCH
-Description: $NAME binary package (repacked)
-Section: net
-Priority: optional
-Maintainer: Automated Build <https://github.com/${{ github.repository }}>
-Source: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
-EOF
+            Package: $NAME
+            Version: $VERSION
+            Architecture: $ARCH
+            Description: $NAME binary package (repacked)
+            Section: net
+            Priority: optional
+            Maintainer: Automated Build <https://github.com/${{ github.repository }}>
+            Source: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
+            EOF
 
             echo '2.0' > debian-binary
 
@@ -193,15 +193,15 @@ EOF
             cp -R luci-app-vnt/luci-app-vnt/root/* pkg/
           fi
           cat > pkg/CONTROL/control <<EOF
-Package: $NAME
-Version: $VERSION
-Architecture: all
-Description: LuCI support for VNT (Virtual Network Tunnel)
-Section: luci
-Priority: optional
-Maintainer: Automated Build <https://github.com/${{ github.repository }}>
-Source: https://github.com/lmq8267/luci-app-vnt
-EOF
+          Package: $NAME
+          Version: $VERSION
+          Architecture: all
+          Description: LuCI support for VNT (Virtual Network Tunnel)
+          Section: luci
+          Priority: optional
+          Maintainer: Automated Build <https://github.com/${{ github.repository }}>
+          Source: https://github.com/lmq8267/luci-app-vnt
+          EOF
 
           echo '2.0' > debian-binary
 
