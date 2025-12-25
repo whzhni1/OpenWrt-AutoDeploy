@@ -98,6 +98,8 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: 自动打包 VNT/VNTS IPK / APK（动态架构）
+        env:
+          ASSETS: ${{ steps.assets.outputs.assets }}
         run: |
           set -e
           mkdir -p output
@@ -105,7 +107,9 @@ jobs:
           VERSION="${{ matrix.project.version }}"
           NAME="${{ matrix.project.local_name }}"
 
-          for asset in ${{ steps.assets.outputs.assets }}; do
+          echo "$ASSETS" | while IFS= read -r asset; do
+            [ -z "$asset" ] && continue
+            
             case "$asset" in
               *unknown-linux-musl*.tar.gz)
                 ARCH=$(echo "$asset" | sed -E 's/.*-([^-]+)-unknown-linux-musl.*\.tar\.gz/\1/')
@@ -125,15 +129,15 @@ jobs:
             tar -xf bin.tar.gz -C pkg/usr/bin
 
             cat > pkg/CONTROL/control <<EOF
-            Package: $NAME
-            Version: $VERSION
-            Architecture: $ARCH
-            Description: $NAME binary package (repacked)
-            Section: net
-            Priority: optional
-            Maintainer: Automated Build <https://github.com/${{ github.repository }}>
-            Source: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
-            EOF
+          Package: $NAME
+          Version: $VERSION
+          Architecture: $ARCH
+          Description: $NAME binary package (repacked)
+          Section: net
+          Priority: optional
+          Maintainer: Automated Build <https://github.com/${{ github.repository }}>
+          Source: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
+          EOF
 
             echo '2.0' > debian-binary
 
