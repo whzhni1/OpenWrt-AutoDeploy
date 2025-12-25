@@ -6,3 +6,4 @@ luci-theme-aurora|v0.9.0_beta
 lucky|v2.24.0
 openlist2|v4.1.8
 tailscale|v1.92.3
+vnts|1.2.12
