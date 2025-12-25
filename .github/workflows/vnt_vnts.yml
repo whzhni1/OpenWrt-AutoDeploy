@@ -281,9 +281,8 @@ jobs:
           set -e
           export UPLOAD_FILES="$(find "$DOWNLOAD_DIR" -type f \( -name '*.ipk' -o -name '*.apk' \) | tr '\n' ' ')"
           export RELEASE_BODY="## 📦 ${{ matrix.project.local_name }} ${{ matrix.project.version }} 自动构建
-- 源仓库: $GITHUB_REPO_URL
-- 构建仓库: https://github.com/${{ github.repository }}"
-
+          - 源仓库: $GITHUB_REPO_URL
+          - 构建仓库: https://github.com/${{ github.repository }}"
           bash .github/workflows/scripts/release.sh
 
       - name: 更新版本记录
