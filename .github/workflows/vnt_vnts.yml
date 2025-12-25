@@ -103,10 +103,12 @@ jobs:
         run: |
           set -e
           mkdir -p output
+
           VERSION="${{ matrix.project.version }}"
           NAME="${{ matrix.project.local_name }}"
           OWNER="${{ matrix.project.github_owner }}"
           REPO="${{ matrix.project.github_repo }}"
+
           get_targets() {
             case "$1" in
               aarch64) echo "aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic" ;;
@@ -119,17 +121,21 @@ jobs:
               *) echo "" ;;
             esac
           }
-
-            for asset in $ASSETS; do
+          for asset in $ASSETS; do
             case "$asset" in *-unknown-linux-musl*.tar.gz) ;; *) continue ;; esac
+
             UPSTREAM_ARCH=$(echo "$asset" | cut -d'-' -f2)
             TARGETS=$(get_targets "$UPSTREAM_ARCH")
-            [ -z "$TARGETS" ] && { echo "跳过: $UPSTREAM_ARCH"; continue; }
+            [ -z "$TARGETS" ] && { echo "⚠️ 跳过: $UPSTREAM_ARCH"; continue; }
+
             echo "📦 $asset → $UPSTREAM_ARCH"
-            wget -q "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${asset}" -O bin.tar.gz || continue
-            mkdir -p tmp_bin && tar -xf bin.tar.gz -C tmp_bin
+
+            wget -q "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${asset}" -O bin.tar.gz || { echo "下载失败"; continue; }
+
+            rm -rf tmp_bin && mkdir -p tmp_bin && tar -xf bin.tar.gz -C tmp_bin
+
             for T in $TARGETS; do
-              mkdir -p pkg/usr/bin pkg/CONTROL
+              rm -rf pkg && mkdir -p pkg/usr/bin pkg/CONTROL
               find tmp_bin -type f -exec cp {} pkg/usr/bin/ \;
               chmod +x pkg/usr/bin/*
 
@@ -146,12 +152,18 @@ jobs:
               ar r "output/${NAME}_${VERSION}_${T}.ipk" debian-binary control.tar.gz data.tar.gz
               tar -czf "output/${NAME}-${VERSION}.${T}.apk" -C pkg .
               rm -rf pkg debian-binary control.tar.gz data.tar.gz
+              echo "  ✅ ${T}"
             done
-
             rm -rf tmp_bin bin.tar.gz
           done
-
-          echo "✅ 生成 $(ls output | wc -l) 个包"
+          COUNT=$(ls output/*.ipk 2>/dev/null | wc -l)
+          echo "📦 共生成 $COUNT 个 ipk 包"
+          ls -lh output/
+          
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ 没有生成任何包！"
+            exit 1
+          fi
 
   build-luci:
     name: 打包 LuCI
