@@ -106,12 +106,15 @@ jobs:
 
           VERSION="${{ matrix.project.version }}"
           NAME="${{ matrix.project.local_name }}"
+          OWNER="${{ matrix.project.github_owner }}"
+          REPO="${{ matrix.project.github_repo }}"
 
           # 上游架构 → OpenWrt 架构映射
           get_targets() {
             case "$1" in
               aarch64) echo "aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic" ;;
-              armv7)   echo "arm_arm1176jzf-s_vfp arm_cortex-a5_vfpv4 arm_cortex-a7 arm_cortex-a7_neon-vfpv4 arm_cortex-a7_vfpv4 arm_cortex-a8_vfpv3 arm_cortex-a9 arm_cortex-a9_neon arm_cortex-a9_vfpv3-d16 arm_cortex-a15_neon-vfpv4 arm_fa526 arm_mpcore arm_xscale" ;;
+              arm)     echo "arm_arm1176jzf-s_vfp arm_fa526 arm_mpcore arm_xscale" ;;
+              armv7)   echo "arm_cortex-a5_vfpv4 arm_cortex-a7 arm_cortex-a7_neon-vfpv4 arm_cortex-a7_vfpv4 arm_cortex-a8_vfpv3 arm_cortex-a9 arm_cortex-a9_neon arm_cortex-a9_vfpv3-d16 arm_cortex-a15_neon-vfpv4" ;;
               x86_64)  echo "x86_64" ;;
               i686)    echo "i386_pentium-mmx i386_pentium4" ;;
               mips)    echo "mips_24kc mips_mips32" ;;
@@ -123,66 +126,45 @@ jobs:
           echo "$ASSETS" | while IFS= read -r asset; do
             [ -z "$asset" ] && continue
             
-            case "$asset" in
-              *unknown-linux-musl*.tar.gz)
-                UPSTREAM_ARCH=$(echo "$asset" | sed -E 's/.*[-_]([a-z0-9_]+)-unknown-linux-musl.*\.tar\.gz/\1/')
-                ;;
-              *)
-                continue
-                ;;
-            esac
+            # 只处理 Linux musl
+            case "$asset" in *-unknown-linux-musl*.tar.gz) ;; *) continue ;; esac
 
+            # 用 cut 提取架构（第2段）: vnt-aarch64-unknown... → aarch64
+            UPSTREAM_ARCH=$(echo "$asset" | cut -d'-' -f2)
+            
             TARGETS=$(get_targets "$UPSTREAM_ARCH")
-            [ -z "$TARGETS" ] && { echo "跳过未知架构: $UPSTREAM_ARCH"; continue; }
+            [ -z "$TARGETS" ] && { echo "跳过: $UPSTREAM_ARCH"; continue; }
 
-            echo "处理: $asset → $TARGETS"
+            echo "📦 $asset → $UPSTREAM_ARCH"
 
-            URL="https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}/releases/download/v${VERSION}/${asset}"
-            wget -q "$URL" -O bin.tar.gz || { echo "下载失败"; continue; }
+            wget -q "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${asset}" -O bin.tar.gz || continue
 
-            mkdir -p tmp_bin
-            tar -xf bin.tar.gz -C tmp_bin
+            mkdir -p tmp_bin && tar -xf bin.tar.gz -C tmp_bin
 
-            for TARGET in $TARGETS; do
+            for T in $TARGETS; do
               mkdir -p pkg/usr/bin pkg/CONTROL
-
               find tmp_bin -type f -exec cp {} pkg/usr/bin/ \;
               chmod +x pkg/usr/bin/*
 
               cat > pkg/CONTROL/control <<EOF
           Package: $NAME
           Version: $VERSION
-          Architecture: $TARGET
-          Description: $NAME binary package (repacked)
-          Section: net
-          Priority: optional
-          Maintainer: Automated Build <https://github.com/${{ github.repository }}>
-          Source: https://github.com/${{ matrix.project.github_owner }}/${{ matrix.project.github_repo }}
+          Architecture: $T
+          Description: $NAME for OpenWrt
           EOF
 
               echo '2.0' > debian-binary
-              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C pkg/CONTROL .
-              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg usr
-
-              ar r "output/${NAME}_${VERSION}_${TARGET}.ipk" debian-binary control.tar.gz data.tar.gz
-              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "output/${NAME}-${VERSION}.${TARGET}.apk" -C pkg .
-
-              echo "✅ ${NAME}_${VERSION}_${TARGET}.ipk"
-              rm -rf pkg control.tar.gz data.tar.gz debian-binary
+              tar -czf control.tar.gz -C pkg/CONTROL .
+              tar -czf data.tar.gz -C pkg usr
+              ar r "output/${NAME}_${VERSION}_${T}.ipk" debian-binary control.tar.gz data.tar.gz
+              tar -czf "output/${NAME}-${VERSION}.${T}.apk" -C pkg .
+              rm -rf pkg debian-binary control.tar.gz data.tar.gz
             done
 
             rm -rf tmp_bin bin.tar.gz
           done
 
-          echo "📦 生成的包:"
-          ls -1 output/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.project.local_name }}-bin
-          path: output/*
-          if-no-files-found: error
-          retention-days: 3
+          echo "✅ 生成 $(ls output | wc -l) 个包"
 
   build-luci:
     name: 打包 LuCI
