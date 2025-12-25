@@ -76,7 +76,33 @@ jobs:
       fail-fast: false
       matrix:
         project: ${{ fromJson(needs.check-updates.outputs.matrix).include }}
-        arch: [aarch64_cortex-a53, aarch64_cortex-a72, aarch64_generic, arm_cortex-a7, arm_cortex-a9, x86_64]
+        arch:
+         - aarch64_cortex-a53
+         - aarch64_cortex-a72
+         - aarch64_cortex-a76
+         - aarch64_generic
+         - arm_arm1176jzf-s_vfp
+         - arm_cortex-a5_vfpv4
+         - arm_cortex-a7
+         - arm_cortex-a7_neon-vfpv4
+         - arm_cortex-a7_vfpv4
+         - arm_cortex-a8_vfpv3
+         - arm_cortex-a9
+         - arm_cortex-a9_neon
+         - arm_cortex-a9_vfpv3-d16
+         - arm_cortex-a15_neon-vfpv4
+         - arm_fa526
+         - arm_mpcore
+         - arm_xscale
+         - i386_pentium-mmx
+         - i386_pentium4
+         - mips_24kc
+         - mips_mips32
+         - mipsel_24kc
+         - mipsel_24kc_24kf
+         - mipsel_74kc
+         - mipsel_mips32
+         - x86_64
         sdk: [openwrt-24.10, SNAPSHOT]
 
     steps:
@@ -138,7 +164,8 @@ jobs:
         run: |
           RELEASE_DIR="${{ runner.temp }}/release"
           mkdir -p "$RELEASE_DIR"
-          cp -r ${{ runner.temp }}/artifacts/*/* "$RELEASE_DIR"
+          find "${{ runner.temp }}/artifacts" -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} "$RELEASE_DIR/" \;
+          echo "📦 已收集的软件包:"
           echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
 
       - name: 多平台发布
