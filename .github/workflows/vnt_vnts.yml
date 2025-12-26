@@ -21,11 +21,9 @@ jobs:
       - uses: actions/checkout@v4
       - id: check
         run: |
-          # 读取配置
           wget -qO /tmp/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /tmp/yq
           echo "defaults=$(/tmp/yq '.defaults' config/sync-config.yaml -o=json -I=0)" >> $GITHUB_OUTPUT
           
-          # 检查更新
           UPDATES='[]'
           for name in vnt vnts; do
             ver=$(curl -s "https://api.github.com/repos/vnt-dev/$name/releases/latest" | jq -r '.tag_name|ltrimstr("v")')
@@ -66,52 +64,58 @@ jobs:
               mipsel)  echo mipsel_24kc mipsel_24kc_24kf mipsel_74kc mipsel_mips32;;
             esac
           }
-
-          # IPK 打包函数
-          mkipk() {
+          
+          mkpkg() {
             local pkg=$1 ver=$2 arch=$3 datadir=$4
-            mkdir -p _ipk
-            echo "2.0" > _ipk/debian-binary
-            printf 'Package: %s\nVersion: %s\nArchitecture: %s\nDescription: %s for OpenWrt\n' "$pkg" "$ver" "$arch" "$pkg" > _ipk/control
-            tar -czf _ipk/control.tar.gz -C _ipk control && rm _ipk/control
-            tar -czf _ipk/data.tar.gz -C "$datadir" .
-            ar -r "out/${pkg}_${ver}_${arch}.ipk" _ipk/debian-binary _ipk/control.tar.gz _ipk/data.tar.gz
-            rm -rf _ipk
+            rm -rf _pkg && mkdir -p _pkg/control
+            cat > _pkg/control/control << CTRL
+            Package: $pkg
+            Version: $ver
+            Architecture: $arch
+            Description: $pkg for OpenWrt
+            CTRL
+            tar -czf _pkg/control.tar.gz --transform 's|^|./|' -C _pkg/control control
+            tar -czf _pkg/data.tar.gz --transform 's|^|./|' -C "$datadir" .
+            echo "2.0" > _pkg/debian-binary
+            ar -rc "out/${pkg}_${ver}_${arch}.ipk" _pkg/debian-binary _pkg/control.tar.gz _pkg/data.tar.gz
+            tar -czf "out/${pkg}-${ver}.${arch}.apk" -C "$datadir" .
+            
+            rm -rf _pkg
           }
-
-          # 下载并打包二进制
           for asset in $(curl -s "https://api.github.com/repos/vnt-dev/$NAME/releases/latest" | jq -r '.assets[].name'); do
             case $asset in *-unknown-linux-musl*.tar.gz) ;; *) continue;; esac
             arch=$(echo "$asset" | cut -d- -f2)
             tgts=$(targets "$arch")
             [ -z "$tgts" ] && continue
             
+            echo "📦 处理: $asset"
             wget -q "https://github.com/vnt-dev/$NAME/releases/download/v$VER/$asset" -O dl.tar.gz || continue
-            mkdir -p bin && tar -xf dl.tar.gz -C bin
+            rm -rf bin && mkdir -p bin && tar -xf dl.tar.gz -C bin
             
             for t in $tgts; do
-              mkdir -p data/usr/bin
+              rm -rf data && mkdir -p data/usr/bin
               find bin -type f -exec cp {} data/usr/bin/ \;
               chmod +x data/usr/bin/*
-              mkipk "$NAME" "$VER" "$t" data
-              rm -rf data
+              mkpkg "$NAME" "$VER" "$t" data
+              echo "  ✅ $t"
             done
-            rm -rf bin dl.tar.gz
+            rm -rf bin dl.tar.gz data
           done
-
-          # 打包 LuCI（仅 vnt）
           if [ "${{ matrix.luci }}" = "true" ]; then
+            echo "📦 打包 luci-app-vnt"
             git clone --depth=1 https://github.com/lmq8267/luci-app-vnt src
             luci_ver=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
-            mkdir -p data
+            rm -rf data && mkdir -p data
             [ -d src/luci-app-vnt/luasrc ] && mkdir -p data/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* data/usr/lib/lua/luci/
             [ -d src/luci-app-vnt/htdocs ] && mkdir -p data/www && cp -R src/luci-app-vnt/htdocs/* data/www/
             [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* data/
-            mkipk luci-app-vnt "$luci_ver" all data
+            mkpkg luci-app-vnt "$luci_ver" all data
+            echo "  ✅ luci-app-vnt"
             rm -rf src data
           fi
 
-          echo "📦 生成 $(ls out/*.ipk | wc -l) 个包"
+          echo ""
+          echo "📦 生成的包:"
           ls -lh out/
 
       - uses: actions/upload-artifact@v4
