@@ -52,7 +52,6 @@ jobs:
           VER="${{ matrix.version }}"
           mkdir -p out
 
-          # 架构映射函数
           targets() {
             case $1 in
               aarch64) echo aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic;;
@@ -65,31 +64,26 @@ jobs:
             esac
           }
 
-          # 通用打包函数
           mkpkg() {
             local pkg="$1" ver="$2" arch="$3" dir="$4" deps="$5"
             local size=$(du -sb "$dir" | cut -f1)
             
-            # 生成 control
             mkdir -p "$dir/CONTROL"
             printf 'Package: %s\nVersion: %s\nArchitecture: %s\nInstalled-Size: %s\nDescription: %s for OpenWrt\n' \
               "$pkg" "$ver" "$arch" "$size" "$pkg" > "$dir/CONTROL/control"
             [ -n "$deps" ] && echo "Depends: $deps" >> "$dir/CONTROL/control"
             
-            # 打包 IPK
             echo '2.0' > debian-binary
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C "$dir/CONTROL" .
             local data_dirs=$(find "$dir" -maxdepth 1 -type d ! -name CONTROL ! -name "$(basename $dir)" -printf './%f ')
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C "$dir" $data_dirs
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "out/${pkg}_${ver}_${arch}.ipk" ./control.tar.gz ./data.tar.gz ./debian-binary
             
-            # 打包 APK
             printf 'pkgname = %s\npkgver = %s\npkgdesc = %s for OpenWrt\narch = %s\nsize = %s\n' \
               "$pkg" "$ver" "$pkg" "$arch" "$size" > "$dir/.PKGINFO"
             [ -n "$deps" ] && echo "depend = $deps" >> "$dir/.PKGINFO"
             rm -rf "$dir/CONTROL"
             tar -czf "out/${pkg}-${ver}.${arch}.apk" -C "$dir" .
-            
             rm -f control.tar.gz data.tar.gz debian-binary
           }
 
@@ -106,7 +100,12 @@ jobs:
             
             for t in $tgts; do
               rm -rf pkg && mkdir -p pkg/usr/bin
-              find bin -type f -exec cp {} pkg/usr/bin/ \;
+              # 只复制主程序
+              if [ "$NAME" = "vnt" ]; then
+                find bin -type f -name "vnt-cli" -exec cp {} pkg/usr/bin/vnt-cli \;
+              else
+                find bin -type f -name "vnts" -exec cp {} pkg/usr/bin/vnts \;
+              fi
               chmod +x pkg/usr/bin/*
               mkpkg "$NAME" "$VER" "$t" "pkg" ""
               echo "  ✅ $t"
@@ -120,17 +119,63 @@ jobs:
             git clone --depth=1 https://github.com/lmq8267/luci-app-vnt src
             luci_ver=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
             
-            rm -rf pkg && mkdir -p pkg
+            rm -rf pkg && mkdir -p pkg/CONTROL
             [ -d src/luci-app-vnt/luasrc ] && mkdir -p pkg/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* pkg/usr/lib/lua/luci/
             [ -d src/luci-app-vnt/htdocs ] && mkdir -p pkg/www && cp -R src/luci-app-vnt/htdocs/* pkg/www/
             [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* pkg/
+            DEFAULT_CONFIG=""
+            if [ -f pkg/etc/config/vnt ]; then
+              DEFAULT_CONFIG=$(cat pkg/etc/config/vnt)
+              rm -f pkg/etc/config/vnt
+            fi
+            find pkg/etc/init.d -type f -exec chmod +x {} \; 2>/dev/null || true
+            size=$(du -sb pkg | cut -f1)
+            printf 'Package: luci-app-vnt\nVersion: %s\nArchitecture: all\nInstalled-Size: %s\nDepends: vnt\nDescription: LuCI support for VNT\n' \
+              "$luci_ver" "$size" > pkg/CONTROL/control
+            echo "/etc/config/vnt" > pkg/CONTROL/conffiles
+            cat > pkg/CONTROL/postinst << 'POSTEOF'
+            #!/bin/sh
+            if [ ! -f /etc/config/vnt ]; then
+            mkdir -p /etc/config
+            cat > /etc/config/vnt << 'CFGEOF'
+            DEFAULT_CONFIG_PLACEHOLDER
+            CFGEOF
+            fi
+            [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enable
+            [ -x /etc/init.d/vnt ] && /etc/init.d/vnt restart 2>/dev/null || true
+            exit 0
+            POSTEOF
+            if [ -n "$DEFAULT_CONFIG" ]; then
+              awk -v cfg="$DEFAULT_CONFIG" '{gsub(/DEFAULT_CONFIG_PLACEHOLDER/, cfg); print}' pkg/CONTROL/postinst > pkg/CONTROL/postinst.tmp
+              mv pkg/CONTROL/postinst.tmp pkg/CONTROL/postinst
+            fi
+            chmod +x pkg/CONTROL/postinst
+            cat > pkg/CONTROL/prerm << 'PRERMEOF'
+            #!/bin/sh
+            [ "$PKG_UPGRADE" = "1" ] || exit 0
+            [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enabled && touch /tmp/.vnt_was_enabled
+            /etc/init.d/vnt stop 2>/dev/null || true
+            exit 0
+            PRERMEOF
+            chmod +x pkg/CONTROL/prerm
             
-            mkpkg "luci-app-vnt" "$luci_ver" "all" "pkg" "vnt"
+            # 打包 IPK
+            echo '2.0' > debian-binary
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C pkg/CONTROL .
+            data_dirs=$(find pkg -maxdepth 1 -type d ! -name CONTROL ! -name pkg -printf './%f ')
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg $data_dirs
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "out/luci-app-vnt_${luci_ver}_all.ipk" ./control.tar.gz ./data.tar.gz ./debian-binary
+            
+            # 打包 APK
+            printf 'pkgname = luci-app-vnt\npkgver = %s\npkgdesc = LuCI support for VNT\narch = all\nsize = %s\ndepend = vnt\n' \
+              "$luci_ver" "$size" > pkg/.PKGINFO
+            rm -rf pkg/CONTROL
+            tar -czf "out/luci-app-vnt-${luci_ver}.all.apk" -C pkg .
+            
+            rm -rf src pkg control.tar.gz data.tar.gz debian-binary
             echo "  ✅ luci-app-vnt"
-            rm -rf src
           fi
 
-          rm -rf pkg
           echo "📦 共 $(ls out | wc -l) 个包"
           ls -lh out/
 
