@@ -5,7 +5,7 @@ LOG_FILE="/tmp/auto-update.log"
 CONFIG_FILE="/etc/auto-setup.conf"
 DEVICE_MODEL="$(cat /tmp/sysinfo/model 2>/dev/null || echo '未知设备')"
 PUSH_TITLE="$DEVICE_MODEL 插件更新通知"
-DEFAULT_EXCLUDE="kernel kmod- base-files busybox lib opkg uclient-fetch ca-bundle ca-certificates luci-app-lucky luci-app-openlist2 luci-app-tailscale"
+DEFAULT_EXCLUDE="kernel kmod- base-files busybox lib opkg uclient-fetch ca-bundle ca-certificates luci-app-lucky luci-app-openlist2 luci-app-tailscale luci-app-vnt"
 
 # 批量初始化变量
 for var in ASSETS_JSON_CACHE INSTALLED_LIST OFFICIAL_PACKAGES NON_OFFICIAL_PACKAGES OFFICIAL_DETAIL THIRDPARTY_DETAIL; do
