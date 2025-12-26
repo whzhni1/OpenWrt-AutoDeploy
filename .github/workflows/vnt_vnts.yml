@@ -87,7 +87,6 @@ jobs:
             rm -f control.tar.gz data.tar.gz debian-binary
           }
 
-          # 下载并打包二进制
           for asset in $(curl -s "https://api.github.com/repos/vnt-dev/$NAME/releases/latest" | jq -r '.assets[].name'); do
             case $asset in *-unknown-linux-musl*.tar.gz) ;; *) continue;; esac
             arch=$(echo "$asset" | cut -d- -f2)
@@ -100,7 +99,6 @@ jobs:
             
             for t in $tgts; do
               rm -rf pkg && mkdir -p pkg/usr/bin
-              # 只复制主程序
               if [ "$NAME" = "vnt" ]; then
                 find bin -type f -name "vnt-cli" -exec cp {} pkg/usr/bin/vnt-cli \;
               else
@@ -120,53 +118,45 @@ jobs:
             luci_ver=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
             
             rm -rf pkg && mkdir -p pkg/CONTROL
+            
             [ -d src/luci-app-vnt/luasrc ] && mkdir -p pkg/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* pkg/usr/lib/lua/luci/
             [ -d src/luci-app-vnt/htdocs ] && mkdir -p pkg/www && cp -R src/luci-app-vnt/htdocs/* pkg/www/
             [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* pkg/
-            DEFAULT_CONFIG=""
+            
+            # 移动默认配置到备份位置
             if [ -f pkg/etc/config/vnt ]; then
-              DEFAULT_CONFIG=$(cat pkg/etc/config/vnt)
-              rm -f pkg/etc/config/vnt
+              mkdir -p pkg/usr/share/vnt
+              mv pkg/etc/config/vnt pkg/usr/share/vnt/vnt.default
             fi
+            
             find pkg/etc/init.d -type f -exec chmod +x {} \; 2>/dev/null || true
+            
             size=$(du -sb pkg | cut -f1)
             printf 'Package: luci-app-vnt\nVersion: %s\nArchitecture: all\nInstalled-Size: %s\nDepends: vnt\nDescription: LuCI support for VNT\n' \
               "$luci_ver" "$size" > pkg/CONTROL/control
+            
             echo "/etc/config/vnt" > pkg/CONTROL/conffiles
-            cat > pkg/CONTROL/postinst << 'POSTEOF'
-            #!/bin/sh
-            if [ ! -f /etc/config/vnt ]; then
-            mkdir -p /etc/config
-            cat > /etc/config/vnt << 'CFGEOF'
-            DEFAULT_CONFIG_PLACEHOLDER
-            CFGEOF
-            fi
+            printf '#!/bin/sh
+            [ ! -f /etc/config/vnt ] && [ -f /usr/share/vnt/vnt.default ] && cp /usr/share/vnt/vnt.default /etc/config/vnt
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enable
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt restart 2>/dev/null || true
             exit 0
-            POSTEOF
-            if [ -n "$DEFAULT_CONFIG" ]; then
-              awk -v cfg="$DEFAULT_CONFIG" '{gsub(/DEFAULT_CONFIG_PLACEHOLDER/, cfg); print}' pkg/CONTROL/postinst > pkg/CONTROL/postinst.tmp
-              mv pkg/CONTROL/postinst.tmp pkg/CONTROL/postinst
-            fi
+            ' > pkg/CONTROL/postinst
             chmod +x pkg/CONTROL/postinst
-            cat > pkg/CONTROL/prerm << 'PRERMEOF'
-            #!/bin/sh
+            printf '#!/bin/sh
             [ "$PKG_UPGRADE" = "1" ] || exit 0
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enabled && touch /tmp/.vnt_was_enabled
             /etc/init.d/vnt stop 2>/dev/null || true
             exit 0
-            PRERMEOF
+            ' > pkg/CONTROL/prerm
             chmod +x pkg/CONTROL/prerm
             
-            # 打包 IPK
             echo '2.0' > debian-binary
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C pkg/CONTROL .
             data_dirs=$(find pkg -maxdepth 1 -type d ! -name CONTROL ! -name pkg -printf './%f ')
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg $data_dirs
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "out/luci-app-vnt_${luci_ver}_all.ipk" ./control.tar.gz ./data.tar.gz ./debian-binary
             
-            # 打包 APK
             printf 'pkgname = luci-app-vnt\npkgver = %s\npkgdesc = LuCI support for VNT\narch = all\nsize = %s\ndepend = vnt\n' \
               "$luci_ver" "$size" > pkg/.PKGINFO
             rm -rf pkg/CONTROL
