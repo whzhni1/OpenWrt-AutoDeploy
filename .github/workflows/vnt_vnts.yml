@@ -123,21 +123,13 @@ jobs:
             [ -d src/luci-app-vnt/htdocs ] && mkdir -p pkg/www && cp -R src/luci-app-vnt/htdocs/* pkg/www/
             [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* pkg/
             
-            # 移动默认配置到备份位置
-            if [ -f pkg/etc/config/vnt ]; then
-              mkdir -p pkg/usr/share/vnt
-              mv pkg/etc/config/vnt pkg/usr/share/vnt/vnt.default
-            fi
-            
             find pkg/etc/init.d -type f -exec chmod +x {} \; 2>/dev/null || true
             
             size=$(du -sb pkg | cut -f1)
             printf 'Package: luci-app-vnt\nVersion: %s\nArchitecture: all\nInstalled-Size: %s\nDepends: vnt\nDescription: LuCI support for VNT\n' \
               "$luci_ver" "$size" > pkg/CONTROL/control
-            
             echo "/etc/config/vnt" > pkg/CONTROL/conffiles
             printf '#!/bin/sh
-            [ ! -f /etc/config/vnt ] && [ -f /usr/share/vnt/vnt.default ] && cp /usr/share/vnt/vnt.default /etc/config/vnt
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enable
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt restart 2>/dev/null || true
             exit 0
@@ -145,7 +137,6 @@ jobs:
             chmod +x pkg/CONTROL/postinst
             printf '#!/bin/sh
             [ "$PKG_UPGRADE" = "1" ] || exit 0
-            [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enabled && touch /tmp/.vnt_was_enabled
             /etc/init.d/vnt stop 2>/dev/null || true
             exit 0
             ' > pkg/CONTROL/prerm
