@@ -1,4 +1,4 @@
-name: 构建 VNT / VNTS / LuCI
+name: 构建 VNT / VNTS
 
 on:
   schedule:
@@ -11,166 +11,122 @@ on:
         default: false
 
 jobs:
-  check-updates:
+  check:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.check.outputs.matrix }}
       has_updates: ${{ steps.check.outputs.has_updates }}
-      defaults: ${{ steps.config.outputs.defaults }}
-      vnt_version: ${{ steps.check.outputs.vnt_version }}
-
+      defaults: ${{ steps.check.outputs.defaults }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: 读取配置
-        id: config
+      - id: check
         run: |
+          # 读取配置
           wget -qO /tmp/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /tmp/yq
-          echo "defaults=$(/tmp/yq eval '.defaults' config/sync-config.yaml -o=json -I=0)" >> $GITHUB_OUTPUT
-
-      - name: 检查更新
-        id: check
-        run: |
-          UPDATES='[]'
-          VNT_VER=""
+          echo "defaults=$(/tmp/yq '.defaults' config/sync-config.yaml -o=json -I=0)" >> $GITHUB_OUTPUT
           
-          for repo in vnt vnts; do
-            latest=$(curl -s "https://api.github.com/repos/vnt-dev/$repo/releases/latest" | jq -r '.tag_name // empty')
-            latest=${latest#v}
-            [ -z "$latest" ] && continue
-            
-            local=$(bash .github/workflows/scripts/version-manager.sh read "$repo" 2>/dev/null || echo "")
-            
-            if [ -z "$local" ] || [ "$local" != "$latest" ] || [ "${{ inputs.force_build }}" = "true" ]; then
-              UPDATES=$(echo "$UPDATES" | jq -c --arg r "$repo" --arg v "$latest" \
-                '. += [{name:$r, version:$v}]')
-              [ "$repo" = "vnt" ] && VNT_VER="$latest"
+          # 检查更新
+          UPDATES='[]'
+          for name in vnt vnts; do
+            ver=$(curl -s "https://api.github.com/repos/vnt-dev/$name/releases/latest" | jq -r '.tag_name|ltrimstr("v")')
+            [ -z "$ver" ] && continue
+            local=$(bash .github/workflows/scripts/version-manager.sh read "$name" 2>/dev/null || echo "")
+            if [ "$local" != "$ver" ] || [ "${{ inputs.force_build }}" = "true" ]; then
+              UPDATES=$(echo "$UPDATES" | jq -c --arg n "$name" --arg v "$ver" '. += [{name:$n,version:$v,luci:($n=="vnt")}]')
             fi
           done
           
-          echo "has_updates=$( [ "$UPDATES" != "[]" ] && echo true || echo false )" >> $GITHUB_OUTPUT
+          [ "$UPDATES" = "[]" ] && echo "has_updates=false" >> $GITHUB_OUTPUT || echo "has_updates=true" >> $GITHUB_OUTPUT
           echo "matrix={\"include\":$UPDATES}" >> $GITHUB_OUTPUT
-          echo "vnt_version=$VNT_VER" >> $GITHUB_OUTPUT
 
   build:
-    name: 打包 ${{ matrix.name }}
+    needs: check
+    if: needs.check.outputs.has_updates == 'true'
     runs-on: ubuntu-latest
-    needs: check-updates
-    if: needs.check-updates.outputs.has_updates == 'true'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.check-updates.outputs.matrix) }}
-
+      matrix: ${{ fromJson(needs.check.outputs.matrix) }}
     steps:
-      - name: 打包二进制为 IPK/APK
+      - name: 构建 ${{ matrix.name }}
         run: |
           set -e
-          mkdir -p output
           NAME="${{ matrix.name }}"
-          VERSION="${{ matrix.version }}"
+          VER="${{ matrix.version }}"
+          mkdir -p out
 
-          get_targets() {
-            case "$1" in
-              aarch64) echo "aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic" ;;
-              arm)     echo "arm_arm1176jzf-s_vfp arm_fa526 arm_mpcore arm_xscale" ;;
-              armv7)   echo "arm_cortex-a5_vfpv4 arm_cortex-a7 arm_cortex-a7_neon-vfpv4 arm_cortex-a7_vfpv4 arm_cortex-a8_vfpv3 arm_cortex-a9 arm_cortex-a9_neon arm_cortex-a9_vfpv3-d16 arm_cortex-a15_neon-vfpv4" ;;
-              x86_64)  echo "x86_64" ;;
-              i686)    echo "i386_pentium-mmx i386_pentium4" ;;
-              mips)    echo "mips_24kc mips_mips32" ;;
-              mipsel)  echo "mipsel_24kc mipsel_24kc_24kf mipsel_74kc mipsel_mips32" ;;
+          # 架构映射
+          targets() {
+            case $1 in
+              aarch64) echo aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic;;
+              arm)     echo arm_arm1176jzf-s_vfp arm_fa526 arm_mpcore arm_xscale;;
+              armv7)   echo arm_cortex-a5_vfpv4 arm_cortex-a7 arm_cortex-a7_neon-vfpv4 arm_cortex-a7_vfpv4 arm_cortex-a8_vfpv3 arm_cortex-a9 arm_cortex-a9_neon arm_cortex-a9_vfpv3-d16 arm_cortex-a15_neon-vfpv4;;
+              x86_64)  echo x86_64;;
+              i686)    echo i386_pentium-mmx i386_pentium4;;
+              mips)    echo mips_24kc mips_mips32;;
+              mipsel)  echo mipsel_24kc mipsel_24kc_24kf mipsel_74kc mipsel_mips32;;
             esac
           }
 
-          ASSETS=$(curl -s "https://api.github.com/repos/vnt-dev/$NAME/releases/latest" | jq -r '.assets[].name')
+          # IPK 打包函数
+          mkipk() {
+            local pkg=$1 ver=$2 arch=$3 datadir=$4
+            mkdir -p _ipk
+            echo "2.0" > _ipk/debian-binary
+            printf 'Package: %s\nVersion: %s\nArchitecture: %s\nDescription: %s for OpenWrt\n' "$pkg" "$ver" "$arch" "$pkg" > _ipk/control
+            tar -czf _ipk/control.tar.gz -C _ipk control && rm _ipk/control
+            tar -czf _ipk/data.tar.gz -C "$datadir" .
+            ar -r "out/${pkg}_${ver}_${arch}.ipk" _ipk/debian-binary _ipk/control.tar.gz _ipk/data.tar.gz
+            rm -rf _ipk
+          }
 
-          for asset in $ASSETS; do
-            case "$asset" in *-unknown-linux-musl*.tar.gz) ;; *) continue ;; esac
-
-            ARCH=$(echo "$asset" | cut -d'-' -f2)
-            TARGETS=$(get_targets "$ARCH")
-            [ -z "$TARGETS" ] && continue
-
-            echo "📦 $asset → $ARCH"
-            wget -q "https://github.com/vnt-dev/$NAME/releases/download/v${VERSION}/${asset}" -O bin.tar.gz || continue
-            mkdir -p tmp && tar -xf bin.tar.gz -C tmp
-
-            for T in $TARGETS; do
-              mkdir -p pkg/usr/bin pkg/CONTROL
-              find tmp -type f -exec cp {} pkg/usr/bin/ \;
-              chmod +x pkg/usr/bin/*
-
-              cat > pkg/CONTROL/control <<EOF
-          Package: $NAME
-          Version: $VERSION
-          Architecture: $T
-          Description: $NAME for OpenWrt
-          EOF
-
-              echo '2.0' > debian-binary
-              tar -czf control.tar.gz -C pkg/CONTROL .
-              tar -czf data.tar.gz -C pkg usr
-              ar r "output/${NAME}_${VERSION}_${T}.ipk" debian-binary control.tar.gz data.tar.gz
-              tar -czf "output/${NAME}-${VERSION}.${T}.apk" -C pkg .
-              rm -rf pkg debian-binary control.tar.gz data.tar.gz
+          # 下载并打包二进制
+          for asset in $(curl -s "https://api.github.com/repos/vnt-dev/$NAME/releases/latest" | jq -r '.assets[].name'); do
+            case $asset in *-unknown-linux-musl*.tar.gz) ;; *) continue;; esac
+            arch=$(echo "$asset" | cut -d- -f2)
+            tgts=$(targets "$arch")
+            [ -z "$tgts" ] && continue
+            
+            wget -q "https://github.com/vnt-dev/$NAME/releases/download/v$VER/$asset" -O dl.tar.gz || continue
+            mkdir -p bin && tar -xf dl.tar.gz -C bin
+            
+            for t in $tgts; do
+              mkdir -p data/usr/bin
+              find bin -type f -exec cp {} data/usr/bin/ \;
+              chmod +x data/usr/bin/*
+              mkipk "$NAME" "$VER" "$t" data
+              rm -rf data
             done
-            rm -rf tmp bin.tar.gz
+            rm -rf bin dl.tar.gz
           done
 
-          ls -lh output/
+          # 打包 LuCI（仅 vnt）
+          if [ "${{ matrix.luci }}" = "true" ]; then
+            git clone --depth=1 https://github.com/lmq8267/luci-app-vnt src
+            luci_ver=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
+            mkdir -p data
+            [ -d src/luci-app-vnt/luasrc ] && mkdir -p data/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* data/usr/lib/lua/luci/
+            [ -d src/luci-app-vnt/htdocs ] && mkdir -p data/www && cp -R src/luci-app-vnt/htdocs/* data/www/
+            [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* data/
+            mkipk luci-app-vnt "$luci_ver" all data
+            rm -rf src data
+          fi
+
+          echo "📦 生成 $(ls out/*.ipk | wc -l) 个包"
+          ls -lh out/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}-bin
-          path: output/*
-          if-no-files-found: error
-          retention-days: 3
-
-  build-luci:
-    name: 打包 LuCI
-    runs-on: ubuntu-latest
-    needs: check-updates
-    if: needs.check-updates.outputs.vnt_version != ''
-
-    steps:
-      - name: 打包 luci-app-vnt
-        run: |
-          set -e
-          git clone --depth=1 https://github.com/lmq8267/luci-app-vnt src
-          VERSION=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
-          
-          mkdir -p pkg/CONTROL output
-          [ -d src/luci-app-vnt/luasrc ] && mkdir -p pkg/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* pkg/usr/lib/lua/luci/
-          [ -d src/luci-app-vnt/htdocs ] && mkdir -p pkg/www && cp -R src/luci-app-vnt/htdocs/* pkg/www/
-          [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* pkg/
-
-          cat > pkg/CONTROL/control <<EOF
-          Package: luci-app-vnt
-          Version: $VERSION
-          Architecture: all
-          Description: LuCI support for VNT
-          EOF
-
-          echo '2.0' > debian-binary
-          tar -czf control.tar.gz -C pkg/CONTROL .
-          tar -czf data.tar.gz -C pkg .
-          ar r "output/luci-app-vnt_${VERSION}_all.ipk" debian-binary control.tar.gz data.tar.gz
-          tar -czf "output/luci-app-vnt-${VERSION}.all.apk" -C pkg .
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: luci-app-vnt
-          path: output/*
+          name: ${{ matrix.name }}
+          path: out/*
           retention-days: 3
 
   release:
-    name: 发布 ${{ matrix.name }}
+    needs: [check, build]
+    if: needs.check.outputs.has_updates == 'true'
     runs-on: ubuntu-latest
-    needs: [check-updates, build, build-luci]
-    if: always() && needs.check-updates.outputs.has_updates == 'true' && needs.build.result == 'success'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.check-updates.outputs.matrix) }}
-
+      matrix: ${{ fromJson(needs.check.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -178,41 +134,34 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: ${{ matrix.name }}
+          path: files
 
-      - name: 整理并发布
+      - name: 发布
         env:
-          USERNAME: ${{ fromJSON(needs.check-updates.outputs.defaults).username }}
-          PLATFORMS: ${{ fromJSON(needs.check-updates.outputs.defaults).platforms }}
-          R2_PUBLIC_URL: ${{ fromJSON(needs.check-updates.outputs.defaults).R2_PUBLIC_URL }}
+          USERNAME: ${{ fromJSON(needs.check.outputs.defaults).username }}
+          PLATFORMS: ${{ fromJSON(needs.check.outputs.defaults).platforms }}
+          R2_PUBLIC_URL: ${{ fromJSON(needs.check.outputs.defaults).R2_PUBLIC_URL }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          REPO_NAME: ${{ matrix.name }}
+          TAG_NAME: ${{ matrix.version }}
+          DOWNLOAD_DIR: files
+          GITHUB_REPO_URL: https://github.com/vnt-dev/${{ matrix.name }}
         run: |
-          mkdir -p release
-          find artifacts/${{ matrix.name }}-bin -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} release/ \;
-          [ "${{ matrix.name }}" = "vnt" ] && find artifacts/luci-app-vnt -type f -exec cp {} release/ \;
-          
-          echo "📦 发布文件:"
-          ls -lh release/
-
-          export REPO_NAME="${{ matrix.name }}"
-          export TAG_NAME="${{ matrix.version }}"
-          export DOWNLOAD_DIR="release"
-          export UPLOAD_FILES="$(find release -type f | tr '\n' ' ')"
+          export UPLOAD_FILES="$(find files -type f | tr '\n' ' ')"
           export RELEASE_BODY="## 📦 ${{ matrix.name }} ${{ matrix.version }}"
-          export GITHUB_REPO_URL="https://github.com/vnt-dev/${{ matrix.name }}"
-          
           bash .github/workflows/scripts/release.sh
 
-      - name: 更新版本记录
+      - name: 更新版本
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           bash .github/workflows/scripts/version-manager.sh write "${{ matrix.name }}" "${{ matrix.version }}"
           git add config/version.txt
           git diff --cached --quiet || git commit -m "更新 ${{ matrix.name }} → ${{ matrix.version }}"
-          git push || true
+          git push || git pull --rebase && git push
