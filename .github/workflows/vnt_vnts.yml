@@ -111,30 +111,45 @@ jobs:
             rm -rf bin dl.tar.gz
           done
 
-          # 打包 LuCI
+                    # 打包 LuCI
           if [ "${{ matrix.luci }}" = "true" ]; then
             echo "📦 luci-app-vnt"
             git clone --depth=1 https://github.com/lmq8267/luci-app-vnt src
             luci_ver=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
             
             rm -rf pkg && mkdir -p pkg/CONTROL
-            
-            [ -d src/luci-app-vnt/luasrc ] && mkdir -p pkg/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* pkg/usr/lib/lua/luci/
-            [ -d src/luci-app-vnt/htdocs ] && mkdir -p pkg/www && cp -R src/luci-app-vnt/htdocs/* pkg/www/
-            [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* pkg/
-            
+            echo "📂 上游目录结构:"
+            find src/luci-app-vnt -type f | head -20
+            if [ -d src/luci-app-vnt/luasrc ]; then
+              mkdir -p pkg/usr/lib/lua/luci
+              cp -R src/luci-app-vnt/luasrc/* pkg/usr/lib/lua/luci/
+            fi
+            if [ -d src/luci-app-vnt/htdocs ]; then
+              mkdir -p pkg/www
+              cp -R src/luci-app-vnt/htdocs/* pkg/www/
+            fi
+            if [ -d src/luci-app-vnt/root ]; then
+              cp -R src/luci-app-vnt/root/* pkg/
+            fi
             find pkg/etc/init.d -type f -exec chmod +x {} \; 2>/dev/null || true
+            find pkg/usr/lib/lua -type f -name "*.lua" -exec chmod 644 {} \; 2>/dev/null || true
+            echo "📂 打包目录结构:"
+            find pkg -type f
             
             size=$(du -sb pkg | cut -f1)
             printf 'Package: luci-app-vnt\nVersion: %s\nArchitecture: all\nInstalled-Size: %s\nDepends: vnt\nDescription: LuCI support for VNT\n' \
               "$luci_ver" "$size" > pkg/CONTROL/control
+            
             echo "/etc/config/vnt" > pkg/CONTROL/conffiles
+            
             printf '#!/bin/sh
+            rm -rf /tmp/luci-*
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enable
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt restart 2>/dev/null || true
             exit 0
             ' > pkg/CONTROL/postinst
             chmod +x pkg/CONTROL/postinst
+            
             printf '#!/bin/sh
             [ "$PKG_UPGRADE" = "1" ] || exit 0
             /etc/init.d/vnt stop 2>/dev/null || true
@@ -156,9 +171,6 @@ jobs:
             rm -rf src pkg control.tar.gz data.tar.gz debian-binary
             echo "  ✅ luci-app-vnt"
           fi
-
-          echo "📦 共 $(ls out | wc -l) 个包"
-          ls -lh out/
 
       - uses: actions/upload-artifact@v4
         with:
