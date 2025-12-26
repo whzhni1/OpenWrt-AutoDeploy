@@ -1,6 +1,6 @@
 #!/bin/sh
 
-SCRIPT_VERSION="2.3.1"
+SCRIPT_VERSION="2.3.2"
 LOG_FILE="/tmp/auto-update.log"
 CONFIG_FILE="/etc/auto-setup.conf"
 DEVICE_MODEL="$(cat /tmp/sysinfo/model 2>/dev/null || echo '未知设备')"
@@ -286,7 +286,10 @@ classify_packages() {
             OFFICIAL_PACKAGES="$OFFICIAL_PACKAGES $pkg" || \
             NON_OFFICIAL_PACKAGES="$NON_OFFICIAL_PACKAGES $pkg"
     done
-    
+    [ -z "$OFFICIAL_PACKAGES" ] && {
+        log "⚠ 软件源异常，回退到已知第三方列表"
+        NON_OFFICIAL_PACKAGES="$THIRD_PARTY_INSTALLED"
+    }
     log "包分类: 官方 $(echo $OFFICIAL_PACKAGES|wc -w), 第三方 $(echo $NON_OFFICIAL_PACKAGES|wc -w), 排除 $excluded"
 }
 
