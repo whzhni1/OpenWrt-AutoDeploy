@@ -64,24 +64,8 @@ jobs:
               mipsel)  echo mipsel_24kc mipsel_24kc_24kf mipsel_74kc mipsel_mips32;;
             esac
           }
-          
-          mkpkg() {
-            local pkg=$1 ver=$2 arch=$3 datadir=$4
-            rm -rf _pkg && mkdir -p _pkg/control
-            cat > _pkg/control/control << CTRL
-            Package: $pkg
-            Version: $ver
-            Architecture: $arch
-            Description: $pkg for OpenWrt
-            CTRL
-            tar -czf _pkg/control.tar.gz --transform 's|^|./|' -C _pkg/control control
-            tar -czf _pkg/data.tar.gz --transform 's|^|./|' -C "$datadir" .
-            echo "2.0" > _pkg/debian-binary
-            ar -rc "out/${pkg}_${ver}_${arch}.ipk" _pkg/debian-binary _pkg/control.tar.gz _pkg/data.tar.gz
-            tar -czf "out/${pkg}-${ver}.${arch}.apk" -C "$datadir" .
-            
-            rm -rf _pkg
-          }
+
+          # 下载并打包二进制
           for asset in $(curl -s "https://api.github.com/repos/vnt-dev/$NAME/releases/latest" | jq -r '.assets[].name'); do
             case $asset in *-unknown-linux-musl*.tar.gz) ;; *) continue;; esac
             arch=$(echo "$asset" | cut -d- -f2)
@@ -93,25 +77,73 @@ jobs:
             rm -rf bin && mkdir -p bin && tar -xf dl.tar.gz -C bin
             
             for t in $tgts; do
-              rm -rf data && mkdir -p data/usr/bin
-              find bin -type f -exec cp {} data/usr/bin/ \;
-              chmod +x data/usr/bin/*
-              mkpkg "$NAME" "$VER" "$t" data
+              rm -rf ipk && mkdir -p ipk/{usr/bin,CONTROL}
+              find bin -type f -exec cp {} ipk/usr/bin/ \;
+              chmod +x ipk/usr/bin/*
+              SIZE=$(du -sb ipk/usr/bin | cut -f1)
+              
+              cat > ipk/CONTROL/control <<EOF
+              Package: ${NAME}
+              Version: ${VER}
+              Architecture: ${t}
+              Installed-Size: ${SIZE}
+              Description: ${NAME} for OpenWrt
+              EOF
+              echo '2.0' > debian-binary
+              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C ipk/CONTROL .
+              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C ipk ./usr
+              tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "out/${NAME}_${VER}_${t}.ipk" ./control.tar.gz ./data.tar.gz ./debian-binary
+              
+              mkdir -p apk && cp -r ipk/* apk/
+              cat > apk/.PKGINFO <<EOF
+              pkgname = ${NAME}
+              pkgver = ${VER}
+              pkgdesc = ${NAME} for OpenWrt
+              arch = ${t}
+              size = ${SIZE}
+              EOF
+              tar -czf "out/${NAME}-${VER}.${t}.apk" -C apk .
+              rm -rf apk control.tar.gz data.tar.gz debian-binary
               echo "  ✅ $t"
             done
-            rm -rf bin dl.tar.gz data
+            rm -rf bin dl.tar.gz ipk
           done
+
+          # 打包 LuCI（仅 vnt）
           if [ "${{ matrix.luci }}" = "true" ]; then
             echo "📦 打包 luci-app-vnt"
             git clone --depth=1 https://github.com/lmq8267/luci-app-vnt src
             luci_ver=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
-            rm -rf data && mkdir -p data
-            [ -d src/luci-app-vnt/luasrc ] && mkdir -p data/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* data/usr/lib/lua/luci/
-            [ -d src/luci-app-vnt/htdocs ] && mkdir -p data/www && cp -R src/luci-app-vnt/htdocs/* data/www/
-            [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* data/
-            mkpkg luci-app-vnt "$luci_ver" all data
+            
+            rm -rf ipk && mkdir -p ipk/CONTROL
+            [ -d src/luci-app-vnt/luasrc ] && mkdir -p ipk/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* ipk/usr/lib/lua/luci/
+            [ -d src/luci-app-vnt/htdocs ] && mkdir -p ipk/www && cp -R src/luci-app-vnt/htdocs/* ipk/www/
+            [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* ipk/
+            
+            cat > ipk/CONTROL/control <<EOF
+            Package: luci-app-vnt
+            Version: ${luci_ver}
+            Architecture: all
+            Depends: vnt
+            Description: LuCI support for VNT
+            EOF
+            
+            echo '2.0' > debian-binary
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C ipk/CONTROL .
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C ipk ./usr ./www 2>/dev/null || tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C ipk ./usr
+            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "out/luci-app-vnt_${luci_ver}_all.ipk" ./control.tar.gz ./data.tar.gz ./debian-binary
+            
+            mkdir -p apk && cp -r ipk/* apk/
+            cat > apk/.PKGINFO <<EOF
+            pkgname = luci-app-vnt
+            pkgver = ${luci_ver}
+            pkgdesc = LuCI support for VNT
+            arch = all
+            depend = vnt
+            EOF
+            tar -czf "out/luci-app-vnt-${luci_ver}.all.apk" -C apk .
+            rm -rf src ipk apk control.tar.gz data.tar.gz debian-binary
             echo "  ✅ luci-app-vnt"
-            rm -rf src data
           fi
 
           echo ""
