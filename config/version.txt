@@ -3,7 +3,7 @@ luci-app-openclash|v0.47.028
 luci-app-passwall2|v25.12.25-1
 luci-app-passwall|v25.12.25-1
 luci-theme-aurora|v0.9.0_beta
-lucky|v2.25.1
+lucky|v2.25.2
 openlist2|v4.1.8
 tailscale|v1.92.3
 vnts|1.2.12
