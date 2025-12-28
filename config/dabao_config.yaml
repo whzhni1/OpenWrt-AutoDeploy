@@ -1,0 +1,29 @@
+# config/dabao_config.yaml
+
+defaults:
+  upx: true
+
+projects:
+  openlist:
+    repo: OpenListTeam/openlist
+    luci_repo: sbwml/luci-app-openlist2
+    local_name: openlist2
+    filter: "openlist-linux-*"
+    exclude: ["*.sha256", "*.md5"]
+    deps: [ca-bundle]
+    configs: [/etc/config/openlist2]
+    luci_langs: [zh-cn, zh_Hans]
+
+  vnt:
+    repo: vnt-dev/vnt
+    luci_repo: lmq8267/luci-app-vnt
+    filter: "vnt-*-linux-*"
+    exclude: ["*-android-*", "*.sha256"]
+    deps: [ca-bundle, kmod-tun]
+    configs: [/etc/config/vnt]
+    upx: false
+
+  vnts:
+    repo: vnt-dev/vnts
+    filter: "vnts-*-linux-*"
+    deps: [ca-bundle]
