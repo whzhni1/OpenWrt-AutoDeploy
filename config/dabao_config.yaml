@@ -4,15 +4,15 @@ defaults:
   upx: true
 
 projects:
-  openlist:
-    repo: OpenListTeam/openlist
-    luci_repo: sbwml/luci-app-openlist2
-    local_name: openlist2
-    filter: "openlist-linux-*"
-    exclude: ["*.sha256", "*.md5"]
-    deps: [ca-bundle]
-    configs: [/etc/config/openlist2]
-    luci_langs: [zh-cn, zh_Hans]
+  # openlist:
+   # repo: OpenListTeam/openlist
+    #luci_repo: sbwml/luci-app-openlist2
+    #local_name: openlist2
+    #filter: "openlist-linux-*"
+    #exclude: ["*.sha256", "*.md5"]
+    #deps: [ca-bundle]
+    #configs: [/etc/config/openlist2]
+    #luci_langs: [zh-cn, zh_Hans]
 
   vnt:
     repo: vnt-dev/vnt
