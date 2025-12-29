@@ -17,8 +17,10 @@ projects:
   vnt:
     repo: vnt-dev/vnt
     luci_repo: lmq8267/luci-app-vnt
-    filter: "vnt-*-linux-*"
-    exclude: ["*-android-*", "*.sha256"]
+    filter: "vnt-cli-*-linux-*"
+    exclude: ["*-android-*"]
+    bin_file: vnt-cli
+    bin_name: vnt
     deps: [ca-bundle, kmod-tun]
     configs: [/etc/config/vnt]
     upx: false
@@ -26,4 +28,5 @@ projects:
   vnts:
     repo: vnt-dev/vnts
     filter: "vnts-*-linux-*"
+    bin_file: vnts
     deps: [ca-bundle]
