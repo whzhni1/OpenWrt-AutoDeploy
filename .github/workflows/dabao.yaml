@@ -89,7 +89,8 @@ jobs:
             
             echo "📥 下载文件 (filter: $FILTER)"
             
-            gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url' | while read url; do
+            # 修复：用进程替换避免子 shell 问题
+            while read url; do
               name=$(basename "$url")
               [[ "$name" != $FILTER ]] && continue
               
@@ -101,10 +102,10 @@ jobs:
               
               echo "  ⬇️ $name"
               curl -sL "$url" -o "downloads/$proj/$name"
-            done
+            done < <(gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url')
             
             echo "📂 下载完成:"
-            ls -la downloads/$proj/ || echo "  (空)"
+            ls -la downloads/$proj/
             
             # 解压提取二进制
             BIN_FILE=$(cfg $proj bin_file)
@@ -141,7 +142,7 @@ jobs:
             done
             
             echo "📂 二进制文件:"
-            ls -la bins/$proj/ || echo "  (空)"
+            ls -la bins/$proj/
             
             # 拉取 LuCI
             LUCI_REPO=$(cfg $proj luci_repo)
@@ -153,7 +154,6 @@ jobs:
               LUCI_DIR=$(find "luci/$proj" -maxdepth 1 -type d -name "luci-app-*" | head -1)
               [ -z "$LUCI_DIR" ] && LUCI_DIR="luci/$proj"
               echo "  LuCI 目录: $LUCI_DIR"
-              ls -la "$LUCI_DIR/" || true
             fi
             
             # 设置环境变量
@@ -176,14 +176,6 @@ jobs:
               export EXTRA_FILES
             fi
             
-            echo "🔧 环境变量:"
-            echo "  PKG_DEPS: $PKG_DEPS"
-            echo "  PKG_CONFIGS: $PKG_CONFIGS"
-            echo "  PKG_UPX: $PKG_UPX"
-            echo "  BIN_NAME: $BIN_NAME"
-            echo "  LUCI_LANGS: $LUCI_LANGS"
-            echo "  EXTRA_FILES: $EXTRA_FILES"
-            
             # 打包
             .github/workflows/scripts/dabao.sh "$proj" "$LATEST" "bins/$proj" "$LUCI_DIR"
             
@@ -193,6 +185,7 @@ jobs:
             export DOWNLOAD_DIR="output"
             export PLATFORMS="$(cfg_def $proj platforms "$(def platforms)")"
             export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
+            export USERNAME="$(def username)"
             .github/workflows/scripts/release.sh
             
             # 保存版本
