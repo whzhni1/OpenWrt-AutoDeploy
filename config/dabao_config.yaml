@@ -22,7 +22,7 @@ projects:
     filter: "vnt-*-linux-*"
     exclude: ["*-android-*"]
     bin_file: vnt-cli
-    bin_name: vnt
+    # bin_name: vnt
     deps: [ca-bundle, kmod-tun]
     configs: [/etc/config/vnt]
     upx: false
