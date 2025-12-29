@@ -1,5 +1,6 @@
 defaults:
   upx: true
+  username: whzhni  # 默认用户名（所有平台通用）
   platforms: gitcode gitee gitlab r2
   R2_PUBLIC_URL: https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev
 
