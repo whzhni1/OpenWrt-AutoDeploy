@@ -29,8 +29,14 @@ fix_perms() {
 }
 
 gen_conffiles() {
+    local data_dir="$1" ctrl_dir="$2"
     [ -z "$PKG_CONFIGS" ] && return 0
-    for conf in $PKG_CONFIGS; do echo "$conf"; done > "$1/conffiles"
+    
+    for conf in $PKG_CONFIGS; do
+        [ -f "$data_dir$conf" ] && echo "$conf"
+    done > "$ctrl_dir/conffiles"
+    
+    [ -s "$ctrl_dir/conffiles" ] || rm -f "$ctrl_dir/conffiles"
 }
 
 gen_scripts() {
@@ -75,7 +81,7 @@ do_pack() {
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 二进制打包
+# 二进制打包（只有二进制，无 conffiles）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 pack_bin() {
@@ -83,8 +89,6 @@ pack_bin() {
     local file_name=$(basename "$bin")
     local data_dir="$TEMP_DIR/data_$$" 
     local ctrl_dir="$TEMP_DIR/ctrl_$$"
-    
-    # 安装后的包名（在包管理器显示）
     local install_name="${BIN_NAME:-$PKG_NAME}"
     
     echo "  🔧 $file_name → $install_name"
@@ -94,22 +98,12 @@ pack_bin() {
     
     do_upx "$bin"
     
-    # 二进制安装为简洁名称
     cp "$bin" "$data_dir/usr/bin/$install_name"
     chmod 755 "$data_dir/usr/bin/$install_name"
-    
-    for mapping in $EXTRA_FILES; do
-        local src="${mapping%%:*}" dst="${mapping##*:}"
-        [ -f "$WORK_DIR/$src" ] || continue
-        mkdir -p "$data_dir$(dirname "$dst")"
-        cp "$WORK_DIR/$src" "$data_dir$dst"
-    done
     
     fix_perms "$data_dir"
     
     local size=$(du -sk "$data_dir" | cut -f1)
-    
-    # control 里 Package 用简洁名称
     cat > "$ctrl_dir/control" << EOF
 Package: $install_name
 Version: $PKG_VERSION
@@ -119,13 +113,9 @@ Depends: libc${PKG_DEPS:+, $PKG_DEPS}
 Description: $PKG_NAME
 EOF
     
-    gen_conffiles "$ctrl_dir"
-    
-    # 文件名用原始名 + 版本
     local pkg_file="${file_name}_${PKG_VERSION}"
     
     for fmt in ipk apk; do
-        gen_scripts "$ctrl_dir" "$fmt"
         do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
     done
     
@@ -133,7 +123,7 @@ EOF
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LuCI 打包
+# LuCI 打包（含 init/config，有 conffiles）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 build_luci() {
@@ -186,6 +176,9 @@ Installed-Size: $size
 Depends: luci-base${LUCI_DEPS:+, $LUCI_DEPS}
 Description: LuCI support for $PKG_NAME
 EOF
+    
+    # LuCI 包才需要 conffiles
+    gen_conffiles "$data_dir" "$ctrl_dir"
     
     local pkg_file="${luci_name}_${PKG_VERSION}"
     
