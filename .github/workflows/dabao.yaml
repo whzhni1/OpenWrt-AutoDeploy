@@ -17,8 +17,69 @@ env:
   CONFIG_FILE: config/dabao_config.yaml
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: 生成矩阵
+        id: matrix
+        env:
+          INPUT_PROJECTS: ${{ inputs.projects }}
+          FORCE_BUILD: ${{ inputs.force }}
+        run: |
+          # 获取项目列表
+          PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
+          
+          if [ -n "$INPUT_PROJECTS" ]; then
+            FILTER_PATTERN=$(echo "$INPUT_PROJECTS" | tr ',' '|')
+            PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTER_PATTERN)$" || true)
+          fi
+          
+          # 检查版本，过滤需要更新的项目
+          MATRIX="["
+          first=true
+          
+          for proj in $PROJECTS; do
+            REPO=$(yq e ".projects.$proj.repo" "$CONFIG_FILE")
+            LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"$proj\"" "$CONFIG_FILE")
+            
+            LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+            [ -z "$LATEST" ] && continue
+            
+            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$LOCAL_NAME" 2>/dev/null || echo "")
+            LATEST_CLEAN="${LATEST#v}"
+            CURRENT_CLEAN="${CURRENT#v}"
+            
+            if [ "$FORCE_BUILD" != "true" ] && [ "$LATEST_CLEAN" = "$CURRENT_CLEAN" ]; then
+              echo "⏭️ $proj 已最新 $CURRENT"
+              continue
+            fi
+            
+            echo "✅ $proj 需要更新: $CURRENT → $LATEST"
+            
+            [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
+            MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\"}"
+          done
+          
+          MATRIX="$MATRIX]"
+          echo "result=$MATRIX" >> $GITHUB_OUTPUT
+          echo "📋 矩阵: $MATRIX"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +92,7 @@ jobs:
           sudo cp /tmp/luci/modules/luci-base/src/po2lmo /usr/local/bin/
           chmod +x .github/workflows/scripts/*.sh
 
-      - name: 处理项目
+      - name: 处理 ${{ matrix.project }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
@@ -40,168 +101,139 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
-          INPUT_PROJECTS: ${{ inputs.projects }}
-          FORCE_BUILD: ${{ inputs.force }}
         run: |
+          proj="${{ matrix.project }}"
+          LATEST="${{ matrix.version }}"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 $proj → $LATEST"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
           # 读取配置函数
-          cfg() { yq e ".projects.$1.$2 // \"\"" "$CONFIG_FILE"; }
-          cfg_arr() { yq e ".projects.$1.$2 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
-          cfg_def() { yq e ".projects.$1.$2 // .defaults.$2 // \"$3\"" "$CONFIG_FILE"; }
+          cfg() { yq e ".projects.$proj.$1 // \"\"" "$CONFIG_FILE"; }
+          cfg_arr() { yq e ".projects.$proj.$1 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
+          cfg_def() { yq e ".projects.$proj.$1 // .defaults.$1 // \"$2\"" "$CONFIG_FILE"; }
           def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
           
-          # 获取项目列表
-          PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
+          REPO=$(cfg repo)
+          LOCAL_NAME=$(cfg local_name)
+          LOCAL_NAME=${LOCAL_NAME:-$proj}
+          FILTER=$(cfg filter)
           
-          if [ -n "$INPUT_PROJECTS" ]; then
-            FILTER_PATTERN=$(echo "$INPUT_PROJECTS" | tr ',' '|')
-            PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTER_PATTERN)$" || true)
+          mkdir -p downloads bins output
+          
+          # 下载
+          echo "📥 下载 (filter: $FILTER)"
+          while read url; do
+            name=$(basename "$url")
+            
+            matched=false
+            case "$name" in
+              $FILTER) matched=true ;;
+            esac
+            [ "$matched" = "false" ] && continue
+            
+            skip=false
+            for ex in $(cfg_arr exclude); do
+              case "$name" in
+                $ex) skip=true; break ;;
+              esac
+            done
+            [ "$skip" = "true" ] && continue
+            
+            echo "  ⬇️ $name"
+            curl -sL "$url" -o "downloads/$name"
+          done < <(gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url')
+          
+          echo "📂 下载完成: $(ls downloads | wc -l) 个文件"
+          
+          # 解压
+          BIN_FILE=$(cfg bin_file)
+          echo "📦 解压 (bin_file: $BIN_FILE)"
+          
+          for f in downloads/*; do
+            [ -f "$f" ] || continue
+            tmp=$(mktemp -d)
+            
+            case "$f" in
+              *.tar.gz|*.tgz) tar -xzf "$f" -C "$tmp" ;;
+              *.tar.xz) tar -xJf "$f" -C "$tmp" ;;
+              *.zip) unzip -q "$f" -d "$tmp" ;;
+              *.gz) gunzip -c "$f" > "$tmp/$(basename "${f%.gz}")" ;;
+              *) cp "$f" "$tmp/" ;;
+            esac
+            
+            if [ -n "$BIN_FILE" ]; then
+              bin=$(find "$tmp" -name "$BIN_FILE" -type f | head -1)
+            else
+              bin=$(find "$tmp" -type f -executable | head -1)
+            fi
+            
+            if [ -n "$bin" ]; then
+              out=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
+              cp "$bin" "bins/$out"
+              chmod +x "bins/$out"
+              echo "  ✅ $out"
+            fi
+            rm -rf "$tmp"
+          done
+          
+          echo "📂 二进制: $(ls bins | wc -l) 个文件"
+          
+          # 拉取 LuCI
+          LUCI_REPO=$(cfg luci_repo)
+          LUCI_DIR=""
+          if [ -n "$LUCI_REPO" ]; then
+            echo "📥 拉取 LuCI: $LUCI_REPO"
+            git clone --depth 1 "https://github.com/$LUCI_REPO.git" luci-src
+            LUCI_DIR=$(find luci-src -maxdepth 1 -type d -name "luci-app-*" | head -1)
+            [ -z "$LUCI_DIR" ] && LUCI_DIR="luci-src"
           fi
           
-          for proj in $PROJECTS; do
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📦 $proj"
-            
-            REPO=$(cfg $proj repo)
-            LOCAL_NAME=$(cfg $proj local_name)
-            LOCAL_NAME=${LOCAL_NAME:-$proj}
-            
-            # 获取上游版本
-            LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
-            [ -z "$LATEST" ] && echo "⚠️ 获取版本失败" && continue
-            
-            # 检查版本
-            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$LOCAL_NAME" 2>/dev/null || echo "")
-            LATEST_CLEAN="${LATEST#v}"
-            CURRENT_CLEAN="${CURRENT#v}"
-            
-            if [ "$FORCE_BUILD" != "true" ] && [ "$LATEST_CLEAN" = "$CURRENT_CLEAN" ]; then
-              echo "⏭️ 已最新 $CURRENT"
-              continue
-            fi
-            
-            [ "$FORCE_BUILD" = "true" ] && echo "🔧 强制打包"
-            echo "🔄 $CURRENT → $LATEST"
-            
-            # 下载
-            FILTER=$(cfg $proj filter)
-            rm -rf downloads/$proj bins/$proj output
-            mkdir -p downloads/$proj bins/$proj output
-            
-            echo "📥 下载文件 (filter: $FILTER)"
-            echo "📋 上游文件:"
-            gh api repos/$REPO/releases/latest --jq '.assets[].name' | head -20
-            
-            while read url; do
-              name=$(basename "$url")
-              
-              # glob 匹配
-              matched=false
-              case "$name" in
-                $FILTER) matched=true ;;
-              esac
-              [ "$matched" = "false" ] && continue
-              
-              # 排除检查
-              skip=false
-              for ex in $(cfg_arr $proj exclude); do
-                case "$name" in
-                  $ex) skip=true; break ;;
-                esac
-              done
-              [ "$skip" = "true" ] && continue
-              
-              echo "  ⬇️ $name"
-              curl -sL "$url" -o "downloads/$proj/$name"
-            done < <(gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url')
-            
-            echo "📂 下载完成:"
-            ls -la downloads/$proj/
-            
-            # 解压提取二进制
-            BIN_FILE=$(cfg $proj bin_file)
-            echo "📦 解压文件 (bin_file: $BIN_FILE)"
-            
-            for f in downloads/$proj/*; do
+          # 设置环境变量
+          export PKG_DEPS="$(cfg_arr deps)"
+          export PKG_CONFIGS="$(cfg_arr configs)"
+          export PKG_UPX="$(cfg_def upx true)"
+          export BIN_NAME="$(cfg bin_name)"
+          export LUCI_LANGS="$(cfg_arr luci_langs)"
+          export EXTRA_FILES=""
+          
+          if [ -d "files/$proj" ]; then
+            for f in files/$proj/*; do
               [ -f "$f" ] || continue
-              echo "  解压: $(basename "$f")"
-              tmp=$(mktemp -d)
-              
+              svc="${BIN_NAME:-$proj}"
               case "$f" in
-                *.tar.gz|*.tgz) tar -xzf "$f" -C "$tmp" ;;
-                *.tar.xz) tar -xJf "$f" -C "$tmp" ;;
-                *.zip) unzip -q "$f" -d "$tmp" ;;
-                *.gz) gunzip -c "$f" > "$tmp/$(basename "${f%.gz}")" ;;
-                *) cp "$f" "$tmp/" ;;
+                *.init) EXTRA_FILES="$EXTRA_FILES $f:/etc/init.d/$svc" ;;
+                *.config) EXTRA_FILES="$EXTRA_FILES $f:/etc/config/$svc" ;;
               esac
-              
-              if [ -n "$BIN_FILE" ]; then
-                bin=$(find "$tmp" -name "$BIN_FILE" -type f | head -1)
-              else
-                bin=$(find "$tmp" -type f -executable | head -1)
-              fi
-              
-              if [ -n "$bin" ]; then
-                out=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
-                echo "  提取: $bin -> bins/$proj/$out"
-                cp "$bin" "bins/$proj/$out"
-                chmod +x "bins/$proj/$out"
-              else
-                echo "  ⚠️ 未找到二进制文件"
-              fi
-              rm -rf "$tmp"
             done
-            
-            echo "📂 二进制文件:"
-            ls -la bins/$proj/
-            
-            # 拉取 LuCI
-            LUCI_REPO=$(cfg $proj luci_repo)
-            LUCI_DIR=""
-            if [ -n "$LUCI_REPO" ]; then
-              echo "📥 拉取 LuCI: $LUCI_REPO"
-              rm -rf luci/$proj
-              git clone --depth 1 "https://github.com/$LUCI_REPO.git" "luci/$proj"
-              LUCI_DIR=$(find "luci/$proj" -maxdepth 1 -type d -name "luci-app-*" | head -1)
-              [ -z "$LUCI_DIR" ] && LUCI_DIR="luci/$proj"
-              echo "  LuCI 目录: $LUCI_DIR"
-            fi
-            
-            # 设置环境变量
-            export PKG_DEPS="$(cfg_arr $proj deps)"
-            export PKG_CONFIGS="$(cfg_arr $proj configs)"
-            export PKG_UPX="$(cfg_def $proj upx true)"
-            export BIN_NAME="$(cfg $proj bin_name)"
-            export LUCI_LANGS="$(cfg_arr $proj luci_langs)"
-            export EXTRA_FILES=""
-            
-            if [ -d "files/$proj" ]; then
-              for f in files/$proj/*; do
-                [ -f "$f" ] || continue
-                svc_name="${BIN_NAME:-$proj}"
-                case "$f" in
-                  *.init) EXTRA_FILES="$EXTRA_FILES $f:/etc/init.d/$svc_name" ;;
-                  *.config) EXTRA_FILES="$EXTRA_FILES $f:/etc/config/$svc_name" ;;
-                esac
-              done
-              export EXTRA_FILES
-            fi
-            
-            # 打包
-            .github/workflows/scripts/dabao.sh "$proj" "$LATEST" "bins/$proj" "$LUCI_DIR"
-            
-            # 发布
-            export REPO_NAME="$LOCAL_NAME"
-            export TAG_NAME="$LATEST"
-            export DOWNLOAD_DIR="output"
-            export PLATFORMS="$(cfg_def $proj platforms "$(def platforms)")"
-            export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
-            export USERNAME="$(def username)"
-            .github/workflows/scripts/release.sh
-            
-            # 保存版本
-            .github/workflows/scripts/version-manager.sh write "$LOCAL_NAME" "$LATEST"
-            
-            rm -rf downloads/$proj bins/$proj luci/$proj
-            
-            echo "✅ $proj 完成"
-          done
+            export EXTRA_FILES
+          fi
+          
+          # 打包
+          .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
+          
+          # 发布
+          export REPO_NAME="$LOCAL_NAME"
+          export TAG_NAME="$LATEST"
+          export DOWNLOAD_DIR="output"
+          export PLATFORMS="$(cfg_def platforms "$(def platforms)")"
+          export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
+          export USERNAME="$(def username)"
+          .github/workflows/scripts/release.sh
+          
+          echo "✅ $proj 完成"
+
+      - name: 保存版本
+        if: success()
+        run: |
+          proj="${{ matrix.project }}"
+          LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"$proj\"" "$CONFIG_FILE")
+          .github/workflows/scripts/version-manager.sh write "$LOCAL_NAME" "${{ matrix.version }}"
+          
+          # 提交版本文件
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add config/version.txt
+          git commit -m "📦 更新 $proj → ${{ matrix.version }}" || true
+          git push || true
