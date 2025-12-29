@@ -16,9 +16,7 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 mkdir -p "$OUT_DIR"
 
 do_upx() {
-    if [ "$PKG_UPX" = "true" ]; then
-        upx --best --lzma "$1" 2>/dev/null || echo "  ⚠️ UPX 跳过"
-    fi
+    [ "$PKG_UPX" = "true" ] && upx --best --lzma "$1" 2>/dev/null || true
 }
 
 fix_perms() {
@@ -31,38 +29,50 @@ fix_perms() {
 gen_conffiles() {
     local data_dir="$1" ctrl_dir="$2"
     [ -z "$PKG_CONFIGS" ] && return 0
-    
     for conf in $PKG_CONFIGS; do
         [ -f "$data_dir$conf" ] && echo "$conf"
     done > "$ctrl_dir/conffiles"
-    
     [ -s "$ctrl_dir/conffiles" ] || rm -f "$ctrl_dir/conffiles"
 }
 
 gen_scripts() {
     local ctrl_dir="$1" fmt="$2" service="${BIN_NAME:-$PKG_NAME}"
     
-    local post="postinst" pre="prerm"
-    [ "$fmt" = "apk" ] && post=".post-install" && pre=".pre-deinstall"
+    local post="postinst" pre="prerm" postrm="postrm"
+    [ "$fmt" = "apk" ] && post=".post-install" && pre=".pre-deinstall" && postrm=".post-deinstall"
     
+    # 安装后：先 enable，再根据 enabled 决定 restart 或 stop
     cat > "$ctrl_dir/$post" << EOF
 #!/bin/sh
-[ -f "/etc/config/$service" ] || exit 0
-enabled=\$(uci -q get $service.config.enabled)
-[ "\$enabled" = "1" ] && {
-    /etc/init.d/$service enable
-    /etc/init.d/$service restart
-}
+/etc/init.d/$service enable 2>/dev/null
+if [ -f "/etc/config/$service" ]; then
+    enabled=\$(uci -q get $service.config.enabled)
+    if [ "\$enabled" = "1" ]; then
+        /etc/init.d/$service restart 2>/dev/null
+    else
+        /etc/init.d/$service stop 2>/dev/null
+    fi
+fi
 exit 0
 EOF
 
+    # 卸载前：停止服务
     cat > "$ctrl_dir/$pre" << EOF
 #!/bin/sh
 /etc/init.d/$service disable 2>/dev/null
 /etc/init.d/$service stop 2>/dev/null
 exit 0
 EOF
-    chmod 755 "$ctrl_dir/$post" "$ctrl_dir/$pre"
+
+    # 卸载后：删除配置
+    cat > "$ctrl_dir/$postrm" << EOF
+#!/bin/sh
+rm -f /etc/config/$service
+rm -rf /etc/$service
+exit 0
+EOF
+
+    chmod 755 "$ctrl_dir/$post" "$ctrl_dir/$pre" "$ctrl_dir/$postrm"
 }
 
 do_pack() {
@@ -72,17 +82,14 @@ do_pack() {
     mkdir -p "$pkg_dir"
     echo "2.0" > "$pkg_dir/debian-binary"
     
-    (cd "$ctrl_dir" && tar czf "$pkg_dir/control.tar.gz" ./)
-    (cd "$data_dir" && tar czf "$pkg_dir/data.tar.gz" ./)
-    (cd "$pkg_dir" && tar czf "$OUT_DIR/${pkg_file}.$fmt" debian-binary control.tar.gz data.tar.gz)
+    # 设置 root 属组
+    (cd "$ctrl_dir" && tar --owner=root --group=root -czf "$pkg_dir/control.tar.gz" ./)
+    (cd "$data_dir" && tar --owner=root --group=root -czf "$pkg_dir/data.tar.gz" ./)
+    (cd "$pkg_dir" && tar --owner=root --group=root -czf "$OUT_DIR/${pkg_file}.$fmt" debian-binary control.tar.gz data.tar.gz)
     
     rm -rf "$pkg_dir"
     echo "  📦 ${pkg_file}.$fmt"
 }
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 二进制打包（只有二进制，无 conffiles）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 pack_bin() {
     local bin="$1"
@@ -122,10 +129,6 @@ EOF
     rm -rf "$data_dir" "$ctrl_dir"
 }
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LuCI 打包（含 init/config，有 conffiles）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 build_luci() {
     [ -d "$LUCI_DIR" ] || return 0
     
@@ -140,15 +143,15 @@ build_luci() {
     
     [ -d "$LUCI_DIR/root" ] && cp -r "$LUCI_DIR/root/"* "$data_dir/"
     
-    [ -d "$LUCI_DIR/luasrc" ] && {
+    if [ -d "$LUCI_DIR/luasrc" ]; then
         mkdir -p "$data_dir/usr/lib/lua/luci"
         cp -r "$LUCI_DIR/luasrc/"* "$data_dir/usr/lib/lua/luci/"
-    }
+    fi
     
-    [ -d "$LUCI_DIR/htdocs" ] && {
+    if [ -d "$LUCI_DIR/htdocs" ]; then
         mkdir -p "$data_dir/www"
         cp -r "$LUCI_DIR/htdocs/"* "$data_dir/www/"
-    }
+    fi
     
     if [ -d "$LUCI_DIR/po" ] && [ -n "$LUCI_LANGS" ]; then
         mkdir -p "$data_dir/usr/lib/lua/luci/i18n"
@@ -156,7 +159,7 @@ build_luci() {
             if [ -d "$LUCI_DIR/po/$lang" ]; then
                 for po in "$LUCI_DIR/po/$lang/"*.po; do
                     [ -f "$po" ] || continue
-                    local lmo="${po##*/}"; lmo="${lmo%.po}.$lang.lmo"
+                    lmo="${po##*/}"; lmo="${lmo%.po}.$lang.lmo"
                     po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/$lmo" || true
                 done
             elif [ -f "$LUCI_DIR/po/$lang.po" ]; then
@@ -177,7 +180,6 @@ Depends: luci-base${LUCI_DEPS:+, $LUCI_DEPS}
 Description: LuCI support for $PKG_NAME
 EOF
     
-    # LuCI 包才需要 conffiles
     gen_conffiles "$data_dir" "$ctrl_dir"
     
     local pkg_file="${luci_name}_${PKG_VERSION}"
@@ -190,19 +192,12 @@ EOF
     rm -rf "$data_dir" "$ctrl_dir"
 }
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 主流程
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
 
 count=0
 if [ -d "$BIN_DIR" ]; then
     for bin in "$BIN_DIR"/*; do
-        if [ -f "$bin" ]; then
-            pack_bin "$bin"
-            ((count++)) || true
-        fi
+        [ -f "$bin" ] && { pack_bin "$bin"; ((count++)) || true; }
     done
 fi
 echo "📊 二进制包: $count 个"
