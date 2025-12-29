@@ -186,6 +186,7 @@ jobs:
           export PKG_DEPS="$(cfg_arr deps)"
           export PKG_CONFIGS="$(cfg_arr configs)"
           export PKG_UPX="$(cfg_def upx true)"
+          export BIN_FILE="$(cfg bin_file)"
           export BIN_NAME="$(cfg bin_name)"
           export LUCI_LANGS="$(cfg_arr luci_langs)"
           export EXTRA_FILES=""
