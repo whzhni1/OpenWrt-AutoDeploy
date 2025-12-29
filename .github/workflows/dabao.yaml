@@ -27,10 +27,10 @@ jobs:
       - name: 生成矩阵
         id: matrix
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_PROJECTS: ${{ inputs.projects }}
           FORCE_BUILD: ${{ inputs.force }}
         run: |
-          # 获取项目列表
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
           
           if [ -n "$INPUT_PROJECTS" ]; then
@@ -38,7 +38,6 @@ jobs:
             PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTER_PATTERN)$" || true)
           fi
           
-          # 检查版本，过滤需要更新的项目
           MATRIX="["
           first=true
           
@@ -58,7 +57,7 @@ jobs:
               continue
             fi
             
-            echo "✅ $proj 需要更新: $CURRENT → $LATEST"
+            echo "✅ $proj: $CURRENT → $LATEST"
             
             [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
             MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\"}"
@@ -67,8 +66,6 @@ jobs:
           MATRIX="$MATRIX]"
           echo "result=$MATRIX" >> $GITHUB_OUTPUT
           echo "📋 矩阵: $MATRIX"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     needs: prepare
@@ -109,7 +106,6 @@ jobs:
           echo "📦 $proj → $LATEST"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # 读取配置函数
           cfg() { yq e ".projects.$proj.$1 // \"\"" "$CONFIG_FILE"; }
           cfg_arr() { yq e ".projects.$proj.$1 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
           cfg_def() { yq e ".projects.$proj.$1 // .defaults.$1 // \"$2\"" "$CONFIG_FILE"; }
@@ -122,7 +118,6 @@ jobs:
           
           mkdir -p downloads bins output
           
-          # 下载
           echo "📥 下载 (filter: $FILTER)"
           while read url; do
             name=$(basename "$url")
@@ -145,9 +140,8 @@ jobs:
             curl -sL "$url" -o "downloads/$name"
           done < <(gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url')
           
-          echo "📂 下载完成: $(ls downloads | wc -l) 个文件"
+          echo "📂 下载: $(ls downloads | wc -l) 个"
           
-          # 解压
           BIN_FILE=$(cfg bin_file)
           echo "📦 解压 (bin_file: $BIN_FILE)"
           
@@ -178,19 +172,17 @@ jobs:
             rm -rf "$tmp"
           done
           
-          echo "📂 二进制: $(ls bins | wc -l) 个文件"
+          echo "📂 二进制: $(ls bins | wc -l) 个"
           
-          # 拉取 LuCI
           LUCI_REPO=$(cfg luci_repo)
           LUCI_DIR=""
           if [ -n "$LUCI_REPO" ]; then
-            echo "📥 拉取 LuCI: $LUCI_REPO"
+            echo "📥 LuCI: $LUCI_REPO"
             git clone --depth 1 "https://github.com/$LUCI_REPO.git" luci-src
             LUCI_DIR=$(find luci-src -maxdepth 1 -type d -name "luci-app-*" | head -1)
             [ -z "$LUCI_DIR" ] && LUCI_DIR="luci-src"
           fi
           
-          # 设置环境变量
           export PKG_DEPS="$(cfg_arr deps)"
           export PKG_CONFIGS="$(cfg_arr configs)"
           export PKG_UPX="$(cfg_def upx true)"
@@ -210,10 +202,8 @@ jobs:
             export EXTRA_FILES
           fi
           
-          # 打包
           .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
           
-          # 发布
           export REPO_NAME="$LOCAL_NAME"
           export TAG_NAME="$LATEST"
           export DOWNLOAD_DIR="output"
@@ -221,8 +211,6 @@ jobs:
           export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
           export USERNAME="$(def username)"
           .github/workflows/scripts/release.sh
-          
-          echo "✅ $proj 完成"
 
       - name: 保存版本
         if: success()
@@ -231,9 +219,8 @@ jobs:
           LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"$proj\"" "$CONFIG_FILE")
           .github/workflows/scripts/version-manager.sh write "$LOCAL_NAME" "${{ matrix.version }}"
           
-          # 提交版本文件
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add config/version.txt
-          git commit -m "📦 更新 $proj → ${{ matrix.version }}" || true
+          git commit -m "📦 $proj → ${{ matrix.version }}" || true
           git push || true
