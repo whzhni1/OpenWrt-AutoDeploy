@@ -44,8 +44,11 @@ jobs:
           
           # 获取项目列表
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
-          [ -n "${{ inputs.projects }}" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^(${{ inputs.projects //,/|}})$" || true)
-          
+
+          if [ -n "${{ inputs.projects }}" ]; then
+            FILTERED=$(echo "${{ inputs.projects }}" | sed 's/,/|/g')
+            PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTERED)$" || true)
+          fi 
           for proj in $PROJECTS; do
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📦 $proj"
