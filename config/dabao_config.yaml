@@ -19,7 +19,7 @@ projects:
   vnt:
     repo: vnt-dev/vnt
     luci_repo: lmq8267/luci-app-vnt
-    filter: "vnt-cli-*-linux-*"
+    filter: "vnt-*-linux-*"
     exclude: ["*-android-*"]
     bin_file: vnt-cli
     bin_name: vnt
