@@ -1,0 +1,155 @@
+name: 打包 OpenWrt 软件包
+
+on:
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: '指定项目（逗号分隔，留空全部）'
+        required: false
+  schedule:
+    - cron: '0 2 * * *'
+
+env:
+  CONFIG_FILE: config/dabao_config.yaml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl
+          git clone --depth 1 https://github.com/openwrt/luci.git /tmp/luci
+          make -C /tmp/luci/modules/luci-base/src po2lmo
+          sudo cp /tmp/luci/modules/luci-base/src/po2lmo /usr/local/bin/
+          chmod +x .github/workflows/scripts/*.sh
+
+      - name: 处理项目
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+        run: |
+          # 读取配置函数
+          cfg() { yq e ".projects.$1.$2 // \"\"" "$CONFIG_FILE"; }
+          cfg_arr() { yq e ".projects.$1.$2 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
+          cfg_def() { yq e ".projects.$1.$2 // .defaults.$2 // \"$3\"" "$CONFIG_FILE"; }
+          
+          # 获取项目列表
+          PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
+          [ -n "${{ inputs.projects }}" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^(${{ inputs.projects //,/|}})$" || true)
+          
+          for proj in $PROJECTS; do
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📦 $proj"
+            
+            REPO=$(cfg $proj repo)
+            LOCAL_NAME=$(cfg $proj local_name); LOCAL_NAME=${LOCAL_NAME:-$proj}
+            
+            # 检查版本
+            LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+            [ -z "$LATEST" ] && echo "⚠️ 获取版本失败" && continue
+            
+            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$LOCAL_NAME" || echo "")
+            [ "$LATEST" = "$CURRENT" ] && echo "⏭️ 已最新 $CURRENT" && continue
+            
+            echo "🔄 $CURRENT → $LATEST"
+            
+            # 下载
+            FILTER=$(cfg $proj filter)
+            mkdir -p downloads/$proj
+            
+            gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url' | while read url; do
+              name=$(basename "$url")
+              [[ "$name" != $FILTER ]] && continue
+              
+              # 排除检查
+              skip=false
+              for ex in $(cfg_arr $proj exclude); do
+                [[ "$name" == $ex ]] && skip=true && break
+              done
+              [ "$skip" = "true" ] && continue
+              
+              echo "⬇️ $name"
+              curl -sL "$url" -o "downloads/$proj/$name"
+            done
+            
+            # 解压提取二进制
+            BIN_FILE=$(cfg $proj bin_file)
+            mkdir -p bins/$proj
+            
+            for f in downloads/$proj/*; do
+              [ -f "$f" ] || continue
+              tmp=$(mktemp -d)
+              
+              case "$f" in
+                *.tar.gz|*.tgz) tar -xzf "$f" -C "$tmp" ;;
+                *.tar.xz) tar -xJf "$f" -C "$tmp" ;;
+                *.zip) unzip -q "$f" -d "$tmp" ;;
+                *.gz) gunzip -c "$f" > "$tmp/$(basename "${f%.gz}")" ;;
+                *) cp "$f" "$tmp/" ;;
+              esac
+              
+              # 提取二进制
+              if [ -n "$BIN_FILE" ]; then
+                bin=$(find "$tmp" -name "$BIN_FILE" -type f | head -1)
+              else
+                bin=$(find "$tmp" -type f -executable | head -1)
+              fi
+              
+              if [ -n "$bin" ]; then
+                out=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
+                cp "$bin" "bins/$proj/$out"
+                chmod +x "bins/$proj/$out"
+              fi
+              rm -rf "$tmp"
+            done
+            
+            # 拉取 LuCI
+            LUCI_REPO=$(cfg $proj luci_repo)
+            LUCI_DIR=""
+            if [ -n "$LUCI_REPO" ]; then
+              git clone --depth 1 "https://github.com/$LUCI_REPO.git" "luci/$proj"
+              LUCI_DIR=$(find "luci/$proj" -maxdepth 1 -type d -name "luci-app-*" | head -1)
+              [ -z "$LUCI_DIR" ] && LUCI_DIR="luci/$proj"
+            fi
+            
+            # 设置环境变量
+            export PKG_DEPS="$(cfg_arr $proj deps)"
+            export PKG_CONFIGS="$(cfg_arr $proj configs)"
+            export PKG_UPX="$(cfg_def $proj upx true)"
+            export BIN_NAME="$(cfg $proj bin_name)"
+            export LUCI_LANGS="$(cfg_arr $proj luci_langs)"
+            export EXTRA_FILES=""
+            
+            # extra_files
+            [ -d "files/$proj" ] && for f in files/$proj/*; do
+              [ -f "$f" ] || continue
+              case "$f" in
+                *.init) EXTRA_FILES="$EXTRA_FILES $f:/etc/init.d/${BIN_NAME:-$proj}" ;;
+                *.config) EXTRA_FILES="$EXTRA_FILES $f:/etc/config/${BIN_NAME:-$proj}" ;;
+              esac
+            done
+            export EXTRA_FILES
+            
+            # 打包
+            .github/workflows/scripts/dabao.sh "$proj" "$LATEST" "bins/$proj" "$LUCI_DIR"
+            
+            # 发布
+            export REPO_NAME="$LOCAL_NAME"
+            export TAG_NAME="$LATEST"
+            export DOWNLOAD_DIR="output"
+            .github/workflows/scripts/release.sh
+            
+            # 保存版本
+            .github/workflows/scripts/version-manager.sh write "$LOCAL_NAME" "$LATEST"
+            
+            echo "✅ $proj 完成"
+          done
