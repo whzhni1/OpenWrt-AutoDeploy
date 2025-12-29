@@ -88,15 +88,25 @@ jobs:
             mkdir -p downloads/$proj bins/$proj output
             
             echo "📥 下载文件 (filter: $FILTER)"
+            echo "📋 上游文件:"
+            gh api repos/$REPO/releases/latest --jq '.assets[].name' | head -20
             
-            # 修复：用进程替换避免子 shell 问题
             while read url; do
               name=$(basename "$url")
-              [[ "$name" != $FILTER ]] && continue
               
+              # glob 匹配
+              matched=false
+              case "$name" in
+                $FILTER) matched=true ;;
+              esac
+              [ "$matched" = "false" ] && continue
+              
+              # 排除检查
               skip=false
               for ex in $(cfg_arr $proj exclude); do
-                [[ "$name" == $ex ]] && skip=true && break
+                case "$name" in
+                  $ex) skip=true; break ;;
+                esac
               done
               [ "$skip" = "true" ] && continue
               
