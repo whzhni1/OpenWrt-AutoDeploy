@@ -7,13 +7,12 @@ PKG_NAME="$1"
 PKG_VERSION="${2#v}"
 BIN_DIR="$3"
 LUCI_DIR="$4"
-
 WORK_DIR="$(pwd)"
 OUT_DIR="$WORK_DIR/output"
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
-
 mkdir -p "$OUT_DIR"
+DISPLAY_NAME="${BIN_NAME:-$PKG_NAME}"
 
 do_upx() {
     [ "$PKG_UPX" = "true" ] && upx --best --lzma "$1" 2>/dev/null || true
@@ -36,39 +35,35 @@ gen_conffiles() {
 }
 
 gen_scripts() {
-    local ctrl_dir="$1" fmt="$2" service="${BIN_NAME:-$PKG_NAME}"
-    
+    local ctrl_dir="$1" fmt="$2"
     local post="postinst" pre="prerm" postrm="postrm"
     [ "$fmt" = "apk" ] && post=".post-install" && pre=".pre-deinstall" && postrm=".post-deinstall"
     
-    # 安装后：先 enable，再根据 enabled 决定 restart 或 stop
     cat > "$ctrl_dir/$post" << EOF
 #!/bin/sh
-/etc/init.d/$service enable 2>/dev/null
-if [ -f "/etc/config/$service" ]; then
-    enabled=\$(uci -q get $service.config.enabled)
+/etc/init.d/$DISPLAY_NAME enable 2>/dev/null
+if [ -f "/etc/config/$DISPLAY_NAME" ]; then
+    enabled=\$(uci -q get $DISPLAY_NAME.config.enabled)
     if [ "\$enabled" = "1" ]; then
-        /etc/init.d/$service restart 2>/dev/null
+        /etc/init.d/$DISPLAY_NAME restart 2>/dev/null
     else
-        /etc/init.d/$service stop 2>/dev/null
+        /etc/init.d/$DISPLAY_NAME stop 2>/dev/null
     fi
 fi
 exit 0
 EOF
 
-    # 卸载前：停止服务
     cat > "$ctrl_dir/$pre" << EOF
 #!/bin/sh
-/etc/init.d/$service disable 2>/dev/null
-/etc/init.d/$service stop 2>/dev/null
+/etc/init.d/$DISPLAY_NAME disable 2>/dev/null
+/etc/init.d/$DISPLAY_NAME stop 2>/dev/null
 exit 0
 EOF
 
-    # 卸载后：删除配置
     cat > "$ctrl_dir/$postrm" << EOF
 #!/bin/sh
-rm -f /etc/config/$service
-rm -rf /etc/$service
+rm -f /etc/config/$DISPLAY_NAME
+rm -rf /etc/$DISPLAY_NAME
 exit 0
 EOF
 
@@ -82,7 +77,6 @@ do_pack() {
     mkdir -p "$pkg_dir"
     echo "2.0" > "$pkg_dir/debian-binary"
     
-    # 设置 root 属组
     (cd "$ctrl_dir" && tar --owner=root --group=root -czf "$pkg_dir/control.tar.gz" ./)
     (cd "$data_dir" && tar --owner=root --group=root -czf "$pkg_dir/data.tar.gz" ./)
     (cd "$pkg_dir" && tar --owner=root --group=root -czf "$OUT_DIR/${pkg_file}.$fmt" debian-binary control.tar.gz data.tar.gz)
@@ -96,23 +90,17 @@ pack_bin() {
     local file_name=$(basename "$bin")
     local data_dir="$TEMP_DIR/data_$$" 
     local ctrl_dir="$TEMP_DIR/ctrl_$$"
-    local install_name="${BIN_NAME:-$PKG_NAME}"
-    
-    echo "  🔧 $file_name → $install_name"
-    
+    local bin_install_name="${BIN_NAME:-$file_name}"
+    echo "  🔧 $file_name → /usr/bin/$bin_install_name (Package: $DISPLAY_NAME)"
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir/usr/bin" "$ctrl_dir"
-    
     do_upx "$bin"
-    
-    cp "$bin" "$data_dir/usr/bin/$install_name"
-    chmod 755 "$data_dir/usr/bin/$install_name"
-    
+    cp "$bin" "$data_dir/usr/bin/$bin_install_name"
+    chmod 755 "$data_dir/usr/bin/$bin_install_name"
     fix_perms "$data_dir"
-    
     local size=$(du -sk "$data_dir" | cut -f1)
     cat > "$ctrl_dir/control" << EOF
-Package: $install_name
+Package: $DISPLAY_NAME
 Version: $PKG_VERSION
 Architecture: all
 Installed-Size: $size
@@ -121,28 +109,21 @@ Description: $PKG_NAME
 EOF
     
     local pkg_file="${file_name}_${PKG_VERSION}"
-    
     for fmt in ipk apk; do
         do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
-    done
-    
+    done 
     rm -rf "$data_dir" "$ctrl_dir"
 }
 
 build_luci() {
     [ -d "$LUCI_DIR" ] || return 0
-    
     local luci_name=$(basename "$LUCI_DIR")
     local data_dir="$TEMP_DIR/luci_data_$$"
     local ctrl_dir="$TEMP_DIR/luci_ctrl_$$"
-    
-    echo "  🔧 LuCI: $luci_name"
-    
+    echo "  🔧 LuCI: $luci_name (service: $DISPLAY_NAME)"
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir" "$ctrl_dir"
-    
     [ -d "$LUCI_DIR/root" ] && cp -r "$LUCI_DIR/root/"* "$data_dir/"
-    
     if [ -d "$LUCI_DIR/luasrc" ]; then
         mkdir -p "$data_dir/usr/lib/lua/luci"
         cp -r "$LUCI_DIR/luasrc/"* "$data_dir/usr/lib/lua/luci/"
@@ -192,7 +173,7 @@ EOF
     rm -rf "$data_dir" "$ctrl_dir"
 }
 
-echo "📦 打包: $PKG_NAME v$PKG_VERSION"
+echo "📦 打包: $PKG_NAME v$PKG_VERSION (显示名: $DISPLAY_NAME)"
 
 count=0
 if [ -d "$BIN_DIR" ]; then
