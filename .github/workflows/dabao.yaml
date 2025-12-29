@@ -36,44 +36,56 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          INPUT_PROJECTS: ${{ inputs.projects }}
         run: |
           # 读取配置函数
           cfg() { yq e ".projects.$1.$2 // \"\"" "$CONFIG_FILE"; }
           cfg_arr() { yq e ".projects.$1.$2 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
           cfg_def() { yq e ".projects.$1.$2 // .defaults.$2 // \"$3\"" "$CONFIG_FILE"; }
+          def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
           
           # 获取项目列表
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
-
-          if [ -n "${{ inputs.projects }}" ]; then
-            FILTERED=$(echo "${{ inputs.projects }}" | sed 's/,/|/g')
-            PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTERED)$" || true)
-          fi 
+          
+          # 过滤指定项目
+          if [ -n "$INPUT_PROJECTS" ]; then
+            FILTER_PATTERN=$(echo "$INPUT_PROJECTS" | tr ',' '|')
+            PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTER_PATTERN)$" || true)
+          fi
+          
           for proj in $PROJECTS; do
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📦 $proj"
             
             REPO=$(cfg $proj repo)
-            LOCAL_NAME=$(cfg $proj local_name); LOCAL_NAME=${LOCAL_NAME:-$proj}
+            LOCAL_NAME=$(cfg $proj local_name)
+            LOCAL_NAME=${LOCAL_NAME:-$proj}
             
-            # 检查版本
+            # 获取上游版本
             LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && echo "⚠️ 获取版本失败" && continue
             
-            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$LOCAL_NAME" || echo "")
-            [ "$LATEST" = "$CURRENT" ] && echo "⏭️ 已最新 $CURRENT" && continue
+            # 检查版本（统一去掉 v 前缀比较）
+            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$LOCAL_NAME" 2>/dev/null || echo "")
+            LATEST_CLEAN="${LATEST#v}"
+            CURRENT_CLEAN="${CURRENT#v}"
+            
+            if [ "$LATEST_CLEAN" = "$CURRENT_CLEAN" ]; then
+              echo "⏭️ 已最新 $CURRENT"
+              continue
+            fi
             
             echo "🔄 $CURRENT → $LATEST"
             
             # 下载
             FILTER=$(cfg $proj filter)
-            mkdir -p downloads/$proj
+            rm -rf downloads/$proj bins/$proj
+            mkdir -p downloads/$proj bins/$proj
             
             gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url' | while read url; do
               name=$(basename "$url")
               [[ "$name" != $FILTER ]] && continue
               
-              # 排除检查
               skip=false
               for ex in $(cfg_arr $proj exclude); do
                 [[ "$name" == $ex ]] && skip=true && break
@@ -86,7 +98,6 @@ jobs:
             
             # 解压提取二进制
             BIN_FILE=$(cfg $proj bin_file)
-            mkdir -p bins/$proj
             
             for f in downloads/$proj/*; do
               [ -f "$f" ] || continue
@@ -100,7 +111,6 @@ jobs:
                 *) cp "$f" "$tmp/" ;;
               esac
               
-              # 提取二进制
               if [ -n "$BIN_FILE" ]; then
                 bin=$(find "$tmp" -name "$BIN_FILE" -type f | head -1)
               else
@@ -119,6 +129,7 @@ jobs:
             LUCI_REPO=$(cfg $proj luci_repo)
             LUCI_DIR=""
             if [ -n "$LUCI_REPO" ]; then
+              rm -rf luci/$proj
               git clone --depth 1 "https://github.com/$LUCI_REPO.git" "luci/$proj"
               LUCI_DIR=$(find "luci/$proj" -maxdepth 1 -type d -name "luci-app-*" | head -1)
               [ -z "$LUCI_DIR" ] && LUCI_DIR="luci/$proj"
@@ -133,14 +144,17 @@ jobs:
             export EXTRA_FILES=""
             
             # extra_files
-            [ -d "files/$proj" ] && for f in files/$proj/*; do
-              [ -f "$f" ] || continue
-              case "$f" in
-                *.init) EXTRA_FILES="$EXTRA_FILES $f:/etc/init.d/${BIN_NAME:-$proj}" ;;
-                *.config) EXTRA_FILES="$EXTRA_FILES $f:/etc/config/${BIN_NAME:-$proj}" ;;
-              esac
-            done
-            export EXTRA_FILES
+            if [ -d "files/$proj" ]; then
+              for f in files/$proj/*; do
+                [ -f "$f" ] || continue
+                svc_name="${BIN_NAME:-$proj}"
+                case "$f" in
+                  *.init) EXTRA_FILES="$EXTRA_FILES $f:/etc/init.d/$svc_name" ;;
+                  *.config) EXTRA_FILES="$EXTRA_FILES $f:/etc/config/$svc_name" ;;
+                esac
+              done
+              export EXTRA_FILES
+            fi
             
             # 打包
             .github/workflows/scripts/dabao.sh "$proj" "$LATEST" "bins/$proj" "$LUCI_DIR"
@@ -149,10 +163,15 @@ jobs:
             export REPO_NAME="$LOCAL_NAME"
             export TAG_NAME="$LATEST"
             export DOWNLOAD_DIR="output"
+            export PLATFORMS="$(cfg_def $proj platforms "$(def platforms)")"
+            export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
             .github/workflows/scripts/release.sh
             
             # 保存版本
             .github/workflows/scripts/version-manager.sh write "$LOCAL_NAME" "$LATEST"
+            
+            # 清理
+            rm -rf downloads/$proj bins/$proj luci/$proj
             
             echo "✅ $proj 完成"
           done
