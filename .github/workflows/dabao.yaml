@@ -6,6 +6,10 @@ on:
       projects:
         description: '指定项目（逗号分隔，留空全部）'
         required: false
+      force:
+        description: '强制重新打包'
+        type: boolean
+        default: false
   schedule:
     - cron: '0 2 * * *'
 
@@ -37,6 +41,7 @@ jobs:
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
           INPUT_PROJECTS: ${{ inputs.projects }}
+          FORCE_BUILD: ${{ inputs.force }}
         run: |
           # 读取配置函数
           cfg() { yq e ".projects.$1.$2 // \"\"" "$CONFIG_FILE"; }
@@ -47,7 +52,6 @@ jobs:
           # 获取项目列表
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
           
-          # 过滤指定项目
           if [ -n "$INPUT_PROJECTS" ]; then
             FILTER_PATTERN=$(echo "$INPUT_PROJECTS" | tr ',' '|')
             PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTER_PATTERN)$" || true)
@@ -65,22 +69,25 @@ jobs:
             LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && echo "⚠️ 获取版本失败" && continue
             
-            # 检查版本（统一去掉 v 前缀比较）
+            # 检查版本
             CURRENT=$(.github/workflows/scripts/version-manager.sh read "$LOCAL_NAME" 2>/dev/null || echo "")
             LATEST_CLEAN="${LATEST#v}"
             CURRENT_CLEAN="${CURRENT#v}"
             
-            if [ "$LATEST_CLEAN" = "$CURRENT_CLEAN" ]; then
+            if [ "$FORCE_BUILD" != "true" ] && [ "$LATEST_CLEAN" = "$CURRENT_CLEAN" ]; then
               echo "⏭️ 已最新 $CURRENT"
               continue
             fi
             
+            [ "$FORCE_BUILD" = "true" ] && echo "🔧 强制打包"
             echo "🔄 $CURRENT → $LATEST"
             
             # 下载
             FILTER=$(cfg $proj filter)
-            rm -rf downloads/$proj bins/$proj
-            mkdir -p downloads/$proj bins/$proj
+            rm -rf downloads/$proj bins/$proj output
+            mkdir -p downloads/$proj bins/$proj output
+            
+            echo "📥 下载文件 (filter: $FILTER)"
             
             gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url' | while read url; do
               name=$(basename "$url")
@@ -92,15 +99,20 @@ jobs:
               done
               [ "$skip" = "true" ] && continue
               
-              echo "⬇️ $name"
+              echo "  ⬇️ $name"
               curl -sL "$url" -o "downloads/$proj/$name"
             done
             
+            echo "📂 下载完成:"
+            ls -la downloads/$proj/ || echo "  (空)"
+            
             # 解压提取二进制
             BIN_FILE=$(cfg $proj bin_file)
+            echo "📦 解压文件 (bin_file: $BIN_FILE)"
             
             for f in downloads/$proj/*; do
               [ -f "$f" ] || continue
+              echo "  解压: $(basename "$f")"
               tmp=$(mktemp -d)
               
               case "$f" in
@@ -119,20 +131,29 @@ jobs:
               
               if [ -n "$bin" ]; then
                 out=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
+                echo "  提取: $bin -> bins/$proj/$out"
                 cp "$bin" "bins/$proj/$out"
                 chmod +x "bins/$proj/$out"
+              else
+                echo "  ⚠️ 未找到二进制文件"
               fi
               rm -rf "$tmp"
             done
+            
+            echo "📂 二进制文件:"
+            ls -la bins/$proj/ || echo "  (空)"
             
             # 拉取 LuCI
             LUCI_REPO=$(cfg $proj luci_repo)
             LUCI_DIR=""
             if [ -n "$LUCI_REPO" ]; then
+              echo "📥 拉取 LuCI: $LUCI_REPO"
               rm -rf luci/$proj
               git clone --depth 1 "https://github.com/$LUCI_REPO.git" "luci/$proj"
               LUCI_DIR=$(find "luci/$proj" -maxdepth 1 -type d -name "luci-app-*" | head -1)
               [ -z "$LUCI_DIR" ] && LUCI_DIR="luci/$proj"
+              echo "  LuCI 目录: $LUCI_DIR"
+              ls -la "$LUCI_DIR/" || true
             fi
             
             # 设置环境变量
@@ -143,7 +164,6 @@ jobs:
             export LUCI_LANGS="$(cfg_arr $proj luci_langs)"
             export EXTRA_FILES=""
             
-            # extra_files
             if [ -d "files/$proj" ]; then
               for f in files/$proj/*; do
                 [ -f "$f" ] || continue
@@ -155,6 +175,14 @@ jobs:
               done
               export EXTRA_FILES
             fi
+            
+            echo "🔧 环境变量:"
+            echo "  PKG_DEPS: $PKG_DEPS"
+            echo "  PKG_CONFIGS: $PKG_CONFIGS"
+            echo "  PKG_UPX: $PKG_UPX"
+            echo "  BIN_NAME: $BIN_NAME"
+            echo "  LUCI_LANGS: $LUCI_LANGS"
+            echo "  EXTRA_FILES: $EXTRA_FILES"
             
             # 打包
             .github/workflows/scripts/dabao.sh "$proj" "$LATEST" "bins/$proj" "$LUCI_DIR"
@@ -170,7 +198,6 @@ jobs:
             # 保存版本
             .github/workflows/scripts/version-manager.sh write "$LOCAL_NAME" "$LATEST"
             
-            # 清理
             rm -rf downloads/$proj bins/$proj luci/$proj
             
             echo "✅ $proj 完成"
