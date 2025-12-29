@@ -15,22 +15,17 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 
 mkdir -p "$OUT_DIR"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 通用函数
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 do_upx() {
     if [ "$PKG_UPX" = "true" ]; then
-        upx --best --lzma "$1" 2>/dev/null || echo "  ⚠️ UPX 跳过: $(basename "$1")"
+        upx --best --lzma "$1" 2>/dev/null || echo "  ⚠️ UPX 跳过"
     fi
 }
 
 fix_perms() {
-    local dir="$1"
-    find "$dir" -type f -exec chmod 644 {} \;
-    find "$dir" -type f -path "*/bin/*" -exec chmod 755 {} \;
-    find "$dir" -type f -path "*/init.d/*" -exec chmod 755 {} \;
-    find "$dir" -type f -path "*/uci-defaults/*" -exec chmod 755 {} \;
+    find "$1" -type f -exec chmod 644 {} \;
+    find "$1" -type f -path "*/bin/*" -exec chmod 755 {} \;
+    find "$1" -type f -path "*/init.d/*" -exec chmod 755 {} \;
+    find "$1" -type f -path "*/uci-defaults/*" -exec chmod 755 {} \;
 }
 
 gen_conffiles() {
@@ -65,8 +60,7 @@ EOF
 }
 
 do_pack() {
-    local pkg="$1" data_dir="$2" ctrl_dir="$3" fmt="$4"
-    local pkg_file="$OUT_DIR/${pkg}.$fmt"
+    local pkg_file="$1" data_dir="$2" ctrl_dir="$3" fmt="$4"
     local pkg_dir="$TEMP_DIR/pkg_${fmt}_$$"
     
     mkdir -p "$pkg_dir"
@@ -74,10 +68,10 @@ do_pack() {
     
     (cd "$ctrl_dir" && tar czf "$pkg_dir/control.tar.gz" ./)
     (cd "$data_dir" && tar czf "$pkg_dir/data.tar.gz" ./)
-    (cd "$pkg_dir" && tar czf "$pkg_file" debian-binary control.tar.gz data.tar.gz)
+    (cd "$pkg_dir" && tar czf "$OUT_DIR/${pkg_file}.$fmt" debian-binary control.tar.gz data.tar.gz)
     
     rm -rf "$pkg_dir"
-    echo "  📦 $pkg_file"
+    echo "  📦 ${pkg_file}.$fmt"
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -86,18 +80,23 @@ do_pack() {
 
 pack_bin() {
     local bin="$1"
-    local bin_name=$(basename "$bin")
+    local file_name=$(basename "$bin")
     local data_dir="$TEMP_DIR/data_$$" 
     local ctrl_dir="$TEMP_DIR/ctrl_$$"
     
-    echo "  🔧 处理: $bin_name"
+    # 安装后的包名（在包管理器显示）
+    local install_name="${BIN_NAME:-$PKG_NAME}"
+    
+    echo "  🔧 $file_name → $install_name"
     
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir/usr/bin" "$ctrl_dir"
     
     do_upx "$bin"
     
-    cp "$bin" "$data_dir/usr/bin/${BIN_NAME:-$bin_name}"
+    # 二进制安装为简洁名称
+    cp "$bin" "$data_dir/usr/bin/$install_name"
+    chmod 755 "$data_dir/usr/bin/$install_name"
     
     for mapping in $EXTRA_FILES; do
         local src="${mapping%%:*}" dst="${mapping##*:}"
@@ -109,8 +108,10 @@ pack_bin() {
     fix_perms "$data_dir"
     
     local size=$(du -sk "$data_dir" | cut -f1)
+    
+    # control 里 Package 用简洁名称
     cat > "$ctrl_dir/control" << EOF
-Package: $bin_name
+Package: $install_name
 Version: $PKG_VERSION
 Architecture: all
 Installed-Size: $size
@@ -120,9 +121,12 @@ EOF
     
     gen_conffiles "$ctrl_dir"
     
+    # 文件名用原始名 + 版本
+    local pkg_file="${file_name}_${PKG_VERSION}"
+    
     for fmt in ipk apk; do
         gen_scripts "$ctrl_dir" "$fmt"
-        do_pack "$bin_name" "$data_dir" "$ctrl_dir" "$fmt"
+        do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
     done
     
     rm -rf "$data_dir" "$ctrl_dir"
@@ -183,9 +187,11 @@ Depends: luci-base${LUCI_DEPS:+, $LUCI_DEPS}
 Description: LuCI support for $PKG_NAME
 EOF
     
+    local pkg_file="${luci_name}_${PKG_VERSION}"
+    
     for fmt in ipk apk; do
         gen_scripts "$ctrl_dir" "$fmt"
-        do_pack "${luci_name}_${PKG_VERSION}" "$data_dir" "$ctrl_dir" "$fmt"
+        do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
     done
     
     rm -rf "$data_dir" "$ctrl_dir"
@@ -196,7 +202,6 @@ EOF
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
-echo "  UPX: $PKG_UPX"
 
 count=0
 if [ -d "$BIN_DIR" ]; then
