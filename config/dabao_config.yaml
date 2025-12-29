@@ -1,15 +1,16 @@
-# config/dabao_config.yaml
-
 defaults:
   upx: true
+  platforms: gitcode gitee gitlab r2
+  R2_PUBLIC_URL: https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev
 
 projects:
-  # openlist:
-   # repo: OpenListTeam/openlist
+ # openlist:
+    #repo: OpenListTeam/openlist
     #luci_repo: sbwml/luci-app-openlist2
-    #local_name: openlist2
+   # local_name: openlist2
     #filter: "openlist-linux-*"
     #exclude: ["*.sha256", "*.md5"]
+    #bin_file: openlist
     #deps: [ca-bundle]
     #configs: [/etc/config/openlist2]
     #luci_langs: [zh-cn, zh_Hans]
@@ -30,3 +31,4 @@ projects:
     filter: "vnts-*-linux-*"
     bin_file: vnts
     deps: [ca-bundle]
+    platforms: r2
