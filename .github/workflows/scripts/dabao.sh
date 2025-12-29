@@ -8,7 +8,6 @@ PKG_VERSION="${2#v}"
 BIN_DIR="$3"
 LUCI_DIR="$4"
 
-# 使用绝对路径
 WORK_DIR="$(pwd)"
 OUT_DIR="$WORK_DIR/output"
 TEMP_DIR=$(mktemp -d)
@@ -21,7 +20,9 @@ mkdir -p "$OUT_DIR"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 do_upx() {
-    [ "$PKG_UPX" = "true" ] && upx --best --lzma "$1" 2>/dev/null || true
+    if [ "$PKG_UPX" = "true" ]; then
+        upx --best --lzma "$1" 2>/dev/null || echo "  ⚠️ UPX 跳过: $(basename "$1")"
+    fi
 }
 
 fix_perms() {
@@ -65,7 +66,7 @@ EOF
 
 do_pack() {
     local pkg="$1" data_dir="$2" ctrl_dir="$3" fmt="$4"
-    local pkg_file="$OUT_DIR/${pkg}_${PKG_VERSION}.$fmt"
+    local pkg_file="$OUT_DIR/${pkg}.$fmt"
     local pkg_dir="$TEMP_DIR/pkg_${fmt}_$$"
     
     mkdir -p "$pkg_dir"
@@ -88,6 +89,8 @@ pack_bin() {
     local bin_name=$(basename "$bin")
     local data_dir="$TEMP_DIR/data_$$" 
     local ctrl_dir="$TEMP_DIR/ctrl_$$"
+    
+    echo "  🔧 处理: $bin_name"
     
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir/usr/bin" "$ctrl_dir"
@@ -136,6 +139,8 @@ build_luci() {
     local data_dir="$TEMP_DIR/luci_data_$$"
     local ctrl_dir="$TEMP_DIR/luci_ctrl_$$"
     
+    echo "  🔧 LuCI: $luci_name"
+    
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir" "$ctrl_dir"
     
@@ -158,10 +163,10 @@ build_luci() {
                 for po in "$LUCI_DIR/po/$lang/"*.po; do
                     [ -f "$po" ] || continue
                     local lmo="${po##*/}"; lmo="${lmo%.po}.$lang.lmo"
-                    po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/$lmo"
+                    po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/$lmo" || true
                 done
             elif [ -f "$LUCI_DIR/po/$lang.po" ]; then
-                po2lmo "$LUCI_DIR/po/$lang.po" "$data_dir/usr/lib/lua/luci/i18n/$luci_name.$lang.lmo"
+                po2lmo "$LUCI_DIR/po/$lang.po" "$data_dir/usr/lib/lua/luci/i18n/$luci_name.$lang.lmo" || true
             fi
         done
     fi
@@ -180,7 +185,7 @@ EOF
     
     for fmt in ipk apk; do
         gen_scripts "$ctrl_dir" "$fmt"
-        do_pack "$luci_name" "$data_dir" "$ctrl_dir" "$fmt"
+        do_pack "${luci_name}_${PKG_VERSION}" "$data_dir" "$ctrl_dir" "$fmt"
     done
     
     rm -rf "$data_dir" "$ctrl_dir"
@@ -191,14 +196,20 @@ EOF
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
+echo "  UPX: $PKG_UPX"
 
 count=0
-[ -d "$BIN_DIR" ] && for bin in "$BIN_DIR"/*; do
-    [ -f "$bin" ] && { pack_bin "$bin"; ((count++)); }
-done
+if [ -d "$BIN_DIR" ]; then
+    for bin in "$BIN_DIR"/*; do
+        if [ -f "$bin" ]; then
+            pack_bin "$bin"
+            ((count++)) || true
+        fi
+    done
+fi
 echo "📊 二进制包: $count 个"
 
-[ -n "$LUCI_DIR" ] && build_luci
+build_luci
 
 echo "📁 输出:"
 ls -la "$OUT_DIR/"
