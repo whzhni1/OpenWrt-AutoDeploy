@@ -43,14 +43,7 @@ gen_scripts() {
     cat > "$ctrl_dir/$post" << EOF
 #!/bin/sh
 /etc/init.d/$DISPLAY_NAME enable 2>/dev/null
-if [ -f "/etc/config/$DISPLAY_NAME" ]; then
-    enabled=\$(uci -q get $DISPLAY_NAME.config.enabled)
-    if [ "\$enabled" = "1" ]; then
-        /etc/init.d/$DISPLAY_NAME restart 2>/dev/null
-    else
-        /etc/init.d/$DISPLAY_NAME stop 2>/dev/null
-    fi
-fi
+/etc/init.d/$DISPLAY_NAME restart 2>/dev/null
 exit 0
 EOF
 
