@@ -32,4 +32,4 @@ projects:
     filter: "vnts-*-linux-*"
     bin_file: vnts
     deps: [ca-bundle]
-    platforms: r2
+   # platforms: r2
