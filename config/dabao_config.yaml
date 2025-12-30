@@ -25,7 +25,7 @@ projects:
     # bin_name: vnt
     deps: [ca-bundle, kmod-tun]
     configs: [/etc/config/vnt]
-   # upx: false
+   # upx: off
 
   vnts:
     repo: vnt-dev/vnts
