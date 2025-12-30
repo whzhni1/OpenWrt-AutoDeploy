@@ -12,8 +12,8 @@ OUT_DIR="$WORK_DIR/output"
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 mkdir -p "$OUT_DIR"
-BIN_INSTALL_NAME="${BIN_NAME:-$BIN_FILE}"
-DISPLAY_NAME="${BIN_NAME:-$PKG_NAME}"
+BIN_INSTALL_NAME="${LOCAL_NAME:-$BIN_FILE}"
+DISPLAY_NAME="${LOCAL_NAME:-$PKG_NAME}"
 
 do_upx() {
     [ "$PKG_UPX" = "true" ] && upx --best --lzma "$1" 2>/dev/null || true
