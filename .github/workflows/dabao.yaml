@@ -112,8 +112,6 @@ jobs:
           def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
           
           REPO=$(cfg repo)
-          LOCAL_NAME=$(cfg local_name)
-          LOCAL_NAME=${LOCAL_NAME:-$proj}
           FILTER=$(cfg filter)
           
           mkdir -p downloads bins output
@@ -186,7 +184,7 @@ jobs:
           export PKG_DEPS="$(cfg_arr deps)"
           export PKG_CONFIGS="$(cfg_arr configs)"
           export PKG_UPX="$(cfg_def upx true)"
-          export LOCAL_NAME
+          export LOCAL_NAME=$(cfg local_name
           export BIN_FILE="$(cfg bin_file)"
           export LUCI_LANGS="$(cfg_arr luci_langs)"
           export EXTRA_FILES=""
