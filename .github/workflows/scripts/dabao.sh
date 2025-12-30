@@ -12,6 +12,7 @@ OUT_DIR="$WORK_DIR/output"
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 mkdir -p "$OUT_DIR"
+BIN_INSTALL_NAME="${BIN_NAME:-$BIN_FILE}"
 DISPLAY_NAME="${BIN_NAME:-$PKG_NAME}"
 
 do_upx() {
@@ -73,14 +74,11 @@ EOF
 do_pack() {
     local pkg_file="$1" data_dir="$2" ctrl_dir="$3" fmt="$4"
     local pkg_dir="$TEMP_DIR/pkg_${fmt}_$$"
-    
     mkdir -p "$pkg_dir"
     echo "2.0" > "$pkg_dir/debian-binary"
-    
     (cd "$ctrl_dir" && tar --owner=root --group=root -czf "$pkg_dir/control.tar.gz" ./)
     (cd "$data_dir" && tar --owner=root --group=root -czf "$pkg_dir/data.tar.gz" ./)
     (cd "$pkg_dir" && tar --owner=root --group=root -czf "$OUT_DIR/${pkg_file}.$fmt" debian-binary control.tar.gz data.tar.gz)
-    
     rm -rf "$pkg_dir"
     echo "  📦 ${pkg_file}.$fmt"
 }
@@ -90,13 +88,13 @@ pack_bin() {
     local file_name=$(basename "$bin")
     local data_dir="$TEMP_DIR/data_$$" 
     local ctrl_dir="$TEMP_DIR/ctrl_$$"
-    local bin_install_name="${BIN_NAME:-$file_name}"
-    echo "  🔧 $file_name → /usr/bin/$bin_install_name (Package: $DISPLAY_NAME)"
+    local install_name="${BIN_INSTALL_NAME:-$file_name}"
+    echo "  🔧 $file_name → /usr/bin/$install_name (Package: $DISPLAY_NAME)"
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir/usr/bin" "$ctrl_dir"
     do_upx "$bin"
-    cp "$bin" "$data_dir/usr/bin/$bin_install_name"
-    chmod 755 "$data_dir/usr/bin/$bin_install_name"
+    cp "$bin" "$data_dir/usr/bin/$install_name"
+    chmod 755 "$data_dir/usr/bin/$install_name"
     fix_perms "$data_dir"
     local size=$(du -sk "$data_dir" | cut -f1)
     cat > "$ctrl_dir/control" << EOF
@@ -111,7 +109,7 @@ EOF
     local pkg_file="${file_name}_${PKG_VERSION}"
     for fmt in ipk apk; do
         do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
-    done 
+    done
     rm -rf "$data_dir" "$ctrl_dir"
 }
 
@@ -150,7 +148,6 @@ build_luci() {
     fi
     
     fix_perms "$data_dir"
-    
     local size=$(du -sk "$data_dir" | cut -f1)
     cat > "$ctrl_dir/control" << EOF
 Package: $luci_name
@@ -162,18 +159,15 @@ Description: LuCI support for $PKG_NAME
 EOF
     
     gen_conffiles "$data_dir" "$ctrl_dir"
-    
     local pkg_file="${luci_name}_${PKG_VERSION}"
-    
     for fmt in ipk apk; do
         gen_scripts "$ctrl_dir" "$fmt"
         do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
     done
-    
     rm -rf "$data_dir" "$ctrl_dir"
 }
 
-echo "📦 打包: $PKG_NAME v$PKG_VERSION (显示名: $DISPLAY_NAME)"
+echo "📦 打包: $PKG_NAME v$PKG_VERSION"
 
 count=0
 if [ -d "$BIN_DIR" ]; then
