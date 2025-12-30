@@ -46,12 +46,12 @@ jobs:
           for proj in $PROJECTS; do
             REPO=$(yq e ".projects.$proj.repo" "$CONFIG_FILE")
             LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"\"" "$CONFIG_FILE")
-            LOCAL_NAME="${LOCAL_NAME:-$proj}"
+            VERSION_NAME="${LOCAL_NAME:-$proj}"
             
             LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && continue
             
-            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$LOCAL_NAME" 2>/dev/null || echo "")
+            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$VERSION_NAME" 2>/dev/null || echo "")
             LATEST_CLEAN="${LATEST#v}"
             CURRENT_CLEAN="${CURRENT#v}"
             
@@ -116,9 +116,8 @@ jobs:
           
           REPO=$(cfg repo)
           LOCAL_NAME=$(cfg local_name)
-          LOCAL_NAME="${LOCAL_NAME:-$proj}"
-          FILTER=$(cfg filter)
           BIN_FILE=$(cfg bin_file)
+          FILTER=$(cfg filter)
           
           mkdir -p downloads bins output
           
@@ -195,7 +194,7 @@ jobs:
           
           .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
           
-          export REPO_NAME="$LOCAL_NAME"
+          export REPO_NAME="${LOCAL_NAME:-$proj}"
           export TAG_NAME="$LATEST"
           export DOWNLOAD_DIR="output"
           export PLATFORMS="$(cfg_def platforms "$(def platforms)")"
@@ -209,8 +208,9 @@ jobs:
         if: success()
         run: |
           proj="${{ matrix.project }}"
-          LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"$proj\"" "$CONFIG_FILE")
-          .github/workflows/scripts/version-manager.sh write "$LOCAL_NAME" "${{ matrix.version }}"
+          LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"\"" "$CONFIG_FILE")
+          VERSION_NAME="${LOCAL_NAME:-$proj}"
+          .github/workflows/scripts/version-manager.sh write "$VERSION_NAME" "${{ matrix.version }}"
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
