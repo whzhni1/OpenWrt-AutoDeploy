@@ -15,6 +15,7 @@ projects:
     deps: [ca-bundle]
     configs: [/etc/config/openlist2]
     luci_langs: [zh-cn, zh_Hans]
+    platforms: r2 gitlab
 
   vnt:
     repo: vnt-dev/vnt
@@ -31,4 +32,3 @@ projects:
     filter: "vnts-*-linux-*"
     bin_file: vnts
     deps: [ca-bundle]
-   # platforms: r2
