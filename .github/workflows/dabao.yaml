@@ -187,14 +187,13 @@ jobs:
           export PKG_CONFIGS="$(cfg_arr configs)"
           export PKG_UPX="$(cfg_def upx true)"
           export BIN_FILE="$(cfg bin_file)"
-          export BIN_NAME="$(cfg bin_name)"
           export LUCI_LANGS="$(cfg_arr luci_langs)"
           export EXTRA_FILES=""
           
           if [ -d "files/$proj" ]; then
             for f in files/$proj/*; do
               [ -f "$f" ] || continue
-              svc="${BIN_NAME:-$proj}"
+              svc="${LOCAL_NAME:-$proj}"
               case "$f" in
                 *.init) EXTRA_FILES="$EXTRA_FILES $f:/etc/init.d/$svc" ;;
                 *.config) EXTRA_FILES="$EXTRA_FILES $f:/etc/config/$svc" ;;
