@@ -31,6 +31,8 @@ jobs:
           INPUT_PROJECTS: ${{ inputs.projects }}
           FORCE_BUILD: ${{ inputs.force }}
         run: |
+          chmod +x .github/workflows/scripts/*.sh
+          
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
           
           if [ -n "$INPUT_PROJECTS" ]; then
@@ -43,7 +45,8 @@ jobs:
           
           for proj in $PROJECTS; do
             REPO=$(yq e ".projects.$proj.repo" "$CONFIG_FILE")
-            LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"$proj\"" "$CONFIG_FILE")
+            LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"\"" "$CONFIG_FILE")
+            LOCAL_NAME="${LOCAL_NAME:-$proj}"
             
             LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && continue
@@ -112,7 +115,10 @@ jobs:
           def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
           
           REPO=$(cfg repo)
+          LOCAL_NAME=$(cfg local_name)
+          LOCAL_NAME="${LOCAL_NAME:-$proj}"
           FILTER=$(cfg filter)
+          BIN_FILE=$(cfg bin_file)
           
           mkdir -p downloads bins output
           
@@ -140,9 +146,7 @@ jobs:
           
           echo "📂 下载: $(ls downloads | wc -l) 个"
           
-          BIN_FILE=$(cfg bin_file)
           echo "📦 解压 (bin_file: $BIN_FILE)"
-          
           for f in downloads/*; do
             [ -f "$f" ] || continue
             tmp=$(mktemp -d)
@@ -184,22 +188,10 @@ jobs:
           export PKG_DEPS="$(cfg_arr deps)"
           export PKG_CONFIGS="$(cfg_arr configs)"
           export PKG_UPX="$(cfg_def upx true)"
-          export LOCAL_NAME=$(cfg local_name)"
-          export BIN_FILE="$(cfg bin_file)"
+          export BIN_FILE
+          export LOCAL_NAME
           export LUCI_LANGS="$(cfg_arr luci_langs)"
-          export EXTRA_FILES=""
-          
-          if [ -d "files/$proj" ]; then
-            for f in files/$proj/*; do
-              [ -f "$f" ] || continue
-              svc="${LOCAL_NAME:-$proj}"
-              case "$f" in
-                *.init) EXTRA_FILES="$EXTRA_FILES $f:/etc/init.d/$svc" ;;
-                *.config) EXTRA_FILES="$EXTRA_FILES $f:/etc/config/$svc" ;;
-              esac
-            done
-            export EXTRA_FILES
-          fi
+          export LUCI_DEPS="$(cfg_arr luci_deps)"
           
           .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
           
@@ -210,6 +202,8 @@ jobs:
           export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
           export USERNAME="$(def username)"
           .github/workflows/scripts/release.sh
+          
+          echo "✅ $proj 完成"
 
       - name: 保存版本
         if: success()
@@ -220,6 +214,7 @@ jobs:
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase || true
           git add config/version.txt
           git commit -m "📦 $proj → ${{ matrix.version }}" || true
           git push || true
