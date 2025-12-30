@@ -139,7 +139,6 @@ build_luci() {
             fi
         done
     fi
-    
     fix_perms "$data_dir"
     local size=$(du -sk "$data_dir" | cut -f1)
     cat > "$ctrl_dir/control" << EOF
@@ -159,7 +158,6 @@ EOF
     done
     rm -rf "$data_dir" "$ctrl_dir"
 }
-
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
 
 count=0
@@ -169,8 +167,6 @@ if [ -d "$BIN_DIR" ]; then
     done
 fi
 echo "📊 二进制包: $count 个"
-
 build_luci
-
 echo "📁 输出:"
 ls -la "$OUT_DIR/"
