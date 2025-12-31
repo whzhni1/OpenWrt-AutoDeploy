@@ -134,48 +134,54 @@ build_luci() {
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir" "$ctrl_dir"
     
-    # 复制 root/（init.d, config, uci-defaults, rpcd/acl.d 等）
+    # 检测目录结构并复制
     if [ -d "$LUCI_DIR/root" ]; then
-        cp -a "$LUCI_DIR/root/." "$data_dir/"
-        echo "    ✅ root/"
-    fi
-    
-    # 复制 htdocs/（JS 版 LuCI）
-    if [ -d "$LUCI_DIR/htdocs" ]; then
-        mkdir -p "$data_dir/www"
-        cp -a "$LUCI_DIR/htdocs/." "$data_dir/www/"
-        echo "    ✅ htdocs/ → www/"
-    fi
-    
-    # 复制 luasrc/（Lua 版 LuCI）
-    if [ -d "$LUCI_DIR/luasrc" ]; then
-        mkdir -p "$data_dir/usr/lib/lua/luci"
-        cp -a "$LUCI_DIR/luasrc/." "$data_dir/usr/lib/lua/luci/"
-        echo "    ✅ luasrc/"
-    fi
-    
-    # 编译所有语言包（自动遍历，不依赖配置）
-    if [ -d "$LUCI_DIR/po" ]; then
-        mkdir -p "$data_dir/usr/lib/lua/luci/i18n"
-        for lang_dir in "$LUCI_DIR/po/"*/; do
-            [ -d "$lang_dir" ] || continue
-            lang=$(basename "$lang_dir")
-            [ "$lang" = "templates" ] && continue
-            
-            for po in "$lang_dir"*.po; do
-                [ -f "$po" ] || continue
-                lmo_name="${po##*/}"
-                lmo_name="${lmo_name%.po}.${lang}.lmo"
-                if po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/$lmo_name" 2>/dev/null; then
-                    echo "    📝 $lmo_name"
-                fi
-            done
+        # 传统结构：root/, htdocs/, luasrc/
+        echo "    📂 传统结构"
+        [ -d "$LUCI_DIR/root" ] && cp -a "$LUCI_DIR/root/." "$data_dir/"
+        [ -d "$LUCI_DIR/htdocs" ] && { mkdir -p "$data_dir/www"; cp -a "$LUCI_DIR/htdocs/." "$data_dir/www/"; }
+        [ -d "$LUCI_DIR/luasrc" ] && { mkdir -p "$data_dir/usr/lib/lua/luci"; cp -a "$LUCI_DIR/luasrc/." "$data_dir/usr/lib/lua/luci/"; }
+    else
+        # 新式结构：直接复制（etc/, usr/, www/ 等）
+        echo "    📂 新式结构"
+        for item in "$LUCI_DIR"/*; do
+            name=$(basename "$item")
+            case "$name" in
+                Makefile|.git*|README*|LICENSE*|po|*.md) ;;
+                *) cp -a "$item" "$data_dir/" ;;
+            esac
         done
     fi
     
-    # 显示打包内容
-    echo "    📂 内容:"
-    find "$data_dir" -type f | head -20 | sed 's|^.*data_[0-9]*||'
+    # 编译语言包（自动遍历所有 po 文件）
+    if [ -d "$LUCI_DIR/po" ]; then
+        mkdir -p "$data_dir/usr/lib/lua/luci/i18n"
+        find "$LUCI_DIR/po" -name "*.po" -type f | while read po; do
+            dir_name=$(basename "$(dirname "$po")")
+            file_name=$(basename "$po" .po)
+            
+            # 跳过模板
+            [ "$dir_name" = "templates" ] && continue
+            
+            # 确定语言代码
+            if [ "$dir_name" = "po" ]; then
+                # po/xxx.zh_Hans.po 格式
+                lang="${file_name##*.}"
+                base="${file_name%.*}"
+            else
+                # po/zh_Hans/xxx.po 格式
+                lang="$dir_name"
+                base="$file_name"
+            fi
+            
+            lmo="$data_dir/usr/lib/lua/luci/i18n/${base}.${lang}.lmo"
+            po2lmo "$po" "$lmo" 2>/dev/null && echo "    📝 ${base}.${lang}.lmo"
+        done
+    fi
+    
+    # 显示内容
+    echo "    📂 文件:"
+    find "$data_dir" -type f | head -15 | sed "s|$data_dir||"
     
     fix_perms "$data_dir"
     
