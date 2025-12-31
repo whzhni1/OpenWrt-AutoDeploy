@@ -14,7 +14,6 @@ projects:
     bin_file: openlist
     deps: [ca-bundle]
     configs: [/etc/config/openlist2]
-    luci_langs: [zh-cn, zh_Hans]
     platforms: r2 gitlab
 
   vnt:
