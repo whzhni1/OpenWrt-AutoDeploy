@@ -62,15 +62,17 @@ jobs:
             
             echo "✅ $proj: $CURRENT → $LATEST"
             
+            LUCI_REPO=$(yq e ".projects.$proj.luci_repo // \"\"" "$CONFIG_FILE")
+            
             [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
-            MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\"}"
+            MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"has_luci\":\"$([ -n \"$LUCI_REPO\" ] && echo true || echo false)\"}"
           done
           
           MATRIX="$MATRIX]"
           echo "result=$MATRIX" >> $GITHUB_OUTPUT
-          echo "📋 矩阵: $MATRIX"
 
-  build:
+  # 二进制打包
+  build_bin:
     needs: prepare
     if: needs.prepare.outputs.matrix != '[]'
     runs-on: ubuntu-latest
@@ -79,7 +81,6 @@ jobs:
       max-parallel: 5
       matrix:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-    
     steps:
       - uses: actions/checkout@v4
 
@@ -87,55 +88,45 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y upx-ucl
-          git clone --depth 1 https://github.com/openwrt/luci.git /tmp/luci
-          make -C /tmp/luci/modules/luci-base/src po2lmo
-          sudo cp /tmp/luci/modules/luci-base/src/po2lmo /usr/local/bin/
           chmod +x .github/workflows/scripts/*.sh
 
-      - name: 处理 ${{ matrix.project }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
-          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+      - name: 读取配置
+        id: config
         run: |
           proj="${{ matrix.project }}"
-          LATEST="${{ matrix.version }}"
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 $proj → $LATEST"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           cfg() { yq e ".projects.$proj.$1 // \"\"" "$CONFIG_FILE"; }
           cfg_arr() { yq e ".projects.$proj.$1 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
           cfg_def() { yq e ".projects.$proj.$1 // .defaults.$1 // \"$2\"" "$CONFIG_FILE"; }
-          def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
           
-          REPO=$(cfg repo)
-          LOCAL_NAME=$(cfg local_name)
-          BIN_FILE=$(cfg bin_file)
-          FILTER=$(cfg filter)
+          echo "repo=$(cfg repo)" >> $GITHUB_OUTPUT
+          echo "local_name=$(cfg local_name)" >> $GITHUB_OUTPUT
+          echo "bin_file=$(cfg bin_file)" >> $GITHUB_OUTPUT
+          echo "filter=$(cfg filter)" >> $GITHUB_OUTPUT
+          echo "deps=$(cfg_arr deps)" >> $GITHUB_OUTPUT
+          echo "upx=$(cfg_def upx true)" >> $GITHUB_OUTPUT
+
+      - name: 下载并处理二进制
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          proj="${{ matrix.project }}"
+          REPO="${{ steps.config.outputs.repo }}"
+          FILTER="${{ steps.config.outputs.filter }}"
+          BIN_FILE="${{ steps.config.outputs.bin_file }}"
+          
+          cfg_arr() { yq e ".projects.$proj.$1 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
           
           mkdir -p downloads bins output
           
-          echo "📥 下载 (filter: $FILTER)"
+          echo "📥 下载"
           while read url; do
             name=$(basename "$url")
-            
-            matched=false
-            case "$name" in
-              $FILTER) matched=true ;;
-            esac
-            [ "$matched" = "false" ] && continue
+            case "$name" in $FILTER) ;; *) continue ;; esac
             
             skip=false
             for ex in $(cfg_arr exclude); do
-              case "$name" in
-                $ex) skip=true; break ;;
-              esac
+              case "$name" in $ex) skip=true; break ;; esac
             done
             [ "$skip" = "true" ] && continue
             
@@ -143,9 +134,7 @@ jobs:
             curl -sL "$url" -o "downloads/$name"
           done < <(gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url')
           
-          echo "📂 下载: $(ls downloads | wc -l) 个"
-          
-          echo "📦 解压 (bin_file: $BIN_FILE)"
+          echo "📦 解压"
           for f in downloads/*; do
             [ -f "$f" ] || continue
             tmp=$(mktemp -d)
@@ -158,11 +147,7 @@ jobs:
               *) cp "$f" "$tmp/" ;;
             esac
             
-            if [ -n "$BIN_FILE" ]; then
-              bin=$(find "$tmp" -name "$BIN_FILE" -type f | head -1)
-            else
-              bin=$(find "$tmp" -type f -executable | head -1)
-            fi
+            bin=$([ -n "$BIN_FILE" ] && find "$tmp" -name "$BIN_FILE" -type f | head -1 || find "$tmp" -type f -executable | head -1)
             
             if [ -n "$bin" ]; then
               out=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
@@ -172,49 +157,163 @@ jobs:
             fi
             rm -rf "$tmp"
           done
+
+      - name: 打包二进制
+        run: |
+          export PKG_DEPS="${{ steps.config.outputs.deps }}"
+          export PKG_UPX="${{ steps.config.outputs.upx }}"
+          export BIN_FILE="${{ steps.config.outputs.bin_file }}"
+          export LOCAL_NAME="${{ steps.config.outputs.local_name }}"
           
-          echo "📂 二进制: $(ls bins | wc -l) 个"
+          .github/workflows/scripts/dabao.sh "${{ matrix.project }}" "${{ matrix.version }}" bins
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.project }}
+          path: output/*
+
+  # LuCI 编译
+  build_luci:
+    needs: prepare
+    if: needs.prepare.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        if: matrix.has_luci == 'true'
+
+      - name: 读取配置
+        if: matrix.has_luci == 'true'
+        id: config
+        run: |
+          proj="${{ matrix.project }}"
           
-          LUCI_REPO=$(cfg luci_repo)
-          LUCI_DIR=""
-          if [ -n "$LUCI_REPO" ]; then
-            echo "📥 LuCI: $LUCI_REPO"
-            git clone --depth 1 "https://github.com/$LUCI_REPO.git" luci-src
-            LUCI_DIR=$(find luci-src -maxdepth 1 -type d -name "luci-app-*" | head -1)
-            [ -z "$LUCI_DIR" ] && LUCI_DIR="luci-src"
-          fi
+          cfg() { yq e ".projects.$proj.$1 // \"\"" "$CONFIG_FILE"; }
+          cfg_arr() { yq e ".projects.$proj.$1 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
           
-          export PKG_DEPS="$(cfg_arr deps)"
-          export PKG_CONFIGS="$(cfg_arr configs)"
-          export PKG_UPX="$(cfg_def upx true)"
-          export BIN_FILE
-          export LOCAL_NAME
-          export LUCI_LANGS="$(cfg_arr luci_langs)"
-          export LUCI_DEPS="$(cfg_arr luci_deps)"
+          LOCAL_NAME=$(cfg local_name)
+          SERVICE_NAME="${LOCAL_NAME:-$proj}"
           
-          .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
+          echo "luci_repo=$(cfg luci_repo)" >> $GITHUB_OUTPUT
+          echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
+          echo "configs=$(cfg_arr configs)" >> $GITHUB_OUTPUT
+
+      - name: 准备 LuCI
+        if: matrix.has_luci == 'true'
+        run: |
+          chmod +x .github/workflows/scripts/*.sh
           
-          export REPO_NAME="${LOCAL_NAME:-$proj}"
-          export TAG_NAME="$LATEST"
-          export DOWNLOAD_DIR="output"
-          export PLATFORMS="$(cfg_def platforms "$(def platforms)")"
-          export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
-          export USERNAME="$(def username)"
+          git clone --depth 1 "https://github.com/${{ steps.config.outputs.luci_repo }}.git" luci-src
+          
+          LUCI_DIR=$(find luci-src -maxdepth 1 -type d -name "luci-app-*" | head -1)
+          [ -z "$LUCI_DIR" ] && LUCI_DIR="luci-src"
+          
+          .github/workflows/scripts/patch-luci.sh "$LUCI_DIR" "${{ steps.config.outputs.service_name }}" "${{ steps.config.outputs.configs }}"
+
+      - name: 编译 LuCI
+        if: matrix.has_luci == 'true'
+        uses: sbwml/openwrt-gh-action-sdk@go1.24
+        env:
+          ARCH: x86_64-openwrt-24.10
+          FEEDNAME: luci_pkg
+          PACKAGES: luci-app-*
+          NO_REFRESH_CHECK: true
+        with:
+          feeds: |
+            src-link luci_pkg ${{ github.workspace }}/luci-src
+
+      - name: 收集包
+        if: matrix.has_luci == 'true'
+        run: |
+          mkdir -p output
+          find bin -name "*.ipk" -exec cp {} output/ \;
+          find bin -name "*.apk" -exec cp {} output/ \;
+          ls -la output/
+
+      - name: 上传产物
+        if: matrix.has_luci == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-${{ matrix.project }}
+          path: output/*
+
+  # 合并发布
+  release:
+    needs: [prepare, build_bin, build_luci]
+    if: needs.prepare.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取配置
+        id: config
+        run: |
+          proj="${{ matrix.project }}"
+          
+          cfg() { yq e ".projects.$proj.$1 // \"\"" "$CONFIG_FILE"; }
+          cfg_def() { yq e ".projects.$proj.$1 // .defaults.$1 // \"$2\"" "$CONFIG_FILE"; }
+          def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
+          
+          LOCAL_NAME=$(cfg local_name)
+          
+          echo "local_name=$LOCAL_NAME" >> $GITHUB_OUTPUT
+          echo "platforms=$(cfg_def platforms "$(def platforms)")" >> $GITHUB_OUTPUT
+          echo "r2_public_url=$(def R2_PUBLIC_URL)" >> $GITHUB_OUTPUT
+          echo "username=$(def username)" >> $GITHUB_OUTPUT
+
+      - name: 下载二进制产物
+        uses: actions/download-artifact@v4
+        with:
+          name: bin-${{ matrix.project }}
+          path: output
+
+      - name: 下载 LuCI 产物
+        if: matrix.has_luci == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: luci-${{ matrix.project }}
+          path: output
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          REPO_NAME: ${{ steps.config.outputs.local_name || matrix.project }}
+          TAG_NAME: ${{ matrix.version }}
+          DOWNLOAD_DIR: output
+          PLATFORMS: ${{ steps.config.outputs.platforms }}
+          R2_PUBLIC_URL: ${{ steps.config.outputs.r2_public_url }}
+          USERNAME: ${{ steps.config.outputs.username }}
+        run: |
+          chmod +x .github/workflows/scripts/*.sh
+          echo "📁 发布内容:"
+          ls -la output/
           .github/workflows/scripts/release.sh
-          
-          echo "✅ $proj 完成"
 
       - name: 保存版本
         if: success()
         run: |
-          proj="${{ matrix.project }}"
-          LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"\"" "$CONFIG_FILE")
-          VERSION_NAME="${LOCAL_NAME:-$proj}"
+          LOCAL_NAME="${{ steps.config.outputs.local_name }}"
+          VERSION_NAME="${LOCAL_NAME:-${{ matrix.project }}}"
           .github/workflows/scripts/version-manager.sh write "$VERSION_NAME" "${{ matrix.version }}"
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase || true
           git add config/version.txt
-          git commit -m "📦 $proj → ${{ matrix.version }}" || true
+          git commit -m "📦 ${{ matrix.project }} → ${{ matrix.version }}" || true
           git push || true
