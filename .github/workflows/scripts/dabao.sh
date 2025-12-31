@@ -111,7 +111,7 @@ build_luci() {
     local luci_name=$(basename "$LUCI_DIR")
     local data_dir="$TEMP_DIR/luci_data_$$"
     local ctrl_dir="$TEMP_DIR/luci_ctrl_$$"
-    echo "  🔧 LuCI: $luci_name (service: $DISPLAY_NAME)"
+    echo "  🔧 LuCI: $luci_name"
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir" "$ctrl_dir"
     [ -d "$LUCI_DIR/root" ] && cp -r "$LUCI_DIR/root/"* "$data_dir/"
@@ -119,25 +119,30 @@ build_luci() {
         mkdir -p "$data_dir/usr/lib/lua/luci"
         cp -r "$LUCI_DIR/luasrc/"* "$data_dir/usr/lib/lua/luci/"
     fi
-    
-    if [ -d "$LUCI_DIR/htdocs" ]; then
-        mkdir -p "$data_dir/www"
-        cp -r "$LUCI_DIR/htdocs/"* "$data_dir/www/"
+    for d in controller model view; do
+        [ -d "$LUCI_DIR/$d" ] && mkdir -p "$data_dir/usr/lib/lua/luci/$d" && \
+            cp -r "$LUCI_DIR/$d/"* "$data_dir/usr/lib/lua/luci/$d/"
+    done
+    [ -d "$LUCI_DIR/htdocs" ] && mkdir -p "$data_dir/www" && cp -r "$LUCI_DIR/htdocs/"* "$data_dir/www/"
+    if [ -d "$LUCI_DIR/src/view" ]; then
+        mkdir -p "$data_dir/www/luci-static/resources/view"
+        cp -r "$LUCI_DIR/src/view/"* "$data_dir/www/luci-static/resources/view/"
     fi
-    
-    if [ -d "$LUCI_DIR/po" ] && [ -n "$LUCI_LANGS" ]; then
+    [ -d "$LUCI_DIR/ucode" ] && mkdir -p "$data_dir/usr/share/ucode/luci" && \
+        cp -r "$LUCI_DIR/ucode/"* "$data_dir/usr/share/ucode/luci/"
+    if [ -d "$LUCI_DIR/po" ]; then
         mkdir -p "$data_dir/usr/lib/lua/luci/i18n"
-        for lang in $LUCI_LANGS; do
-            if [ -d "$LUCI_DIR/po/$lang" ]; then
-                for po in "$LUCI_DIR/po/$lang/"*.po; do
-                    [ -f "$po" ] || continue
-                    lmo="${po##*/}"; lmo="${lmo%.po}.$lang.lmo"
-                    po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/$lmo" || true
-                done
-            elif [ -f "$LUCI_DIR/po/$lang.po" ]; then
-                po2lmo "$LUCI_DIR/po/$lang.po" "$data_dir/usr/lib/lua/luci/i18n/$luci_name.$lang.lmo" || true
-            fi
+        find "$LUCI_DIR/po" -name "*.po" ! -path "*/templates/*" | while read po; do
+            lang=$(basename "$(dirname "$po")")
+            [ "$lang" = "po" ] && lang="${po##*/}" && lang="${lang%.po}"
+            base="${po##*/}"; base="${base%.po}"
+            po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/${base}.${lang}.lmo" 2>/dev/null || true
         done
+    fi
+    if [ -z "$(ls -A "$data_dir" 2>/dev/null)" ]; then
+        echo "  ⚠️ LuCI 目录为空，跳过"
+        rm -rf "$data_dir" "$ctrl_dir"
+        return 0
     fi
     fix_perms "$data_dir"
     local size=$(du -sk "$data_dir" | cut -f1)
