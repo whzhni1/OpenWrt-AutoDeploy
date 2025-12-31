@@ -108,60 +108,131 @@ EOF
 
 build_luci() {
     [ -d "$LUCI_DIR" ] || return 0
+    
     local luci_name=$(basename "$LUCI_DIR")
-    local data_dir="$TEMP_DIR/luci_data_$$"
-    local ctrl_dir="$TEMP_DIR/luci_ctrl_$$"
+    local luci_base="${luci_name#luci-app-}"
+    local data="$TEMP_DIR/luci_data_$$"
+    local ctrl="$TEMP_DIR/luci_ctrl_$$"
+    
     echo "  🔧 LuCI: $luci_name"
-    rm -rf "$data_dir" "$ctrl_dir"
-    mkdir -p "$data_dir" "$ctrl_dir"
-    [ -d "$LUCI_DIR/root" ] && cp -r "$LUCI_DIR/root/"* "$data_dir/"
-    if [ -d "$LUCI_DIR/luasrc" ]; then
-        mkdir -p "$data_dir/usr/lib/lua/luci"
-        cp -r "$LUCI_DIR/luasrc/"* "$data_dir/usr/lib/lua/luci/"
-    fi
-    for d in controller model view; do
-        [ -d "$LUCI_DIR/$d" ] && mkdir -p "$data_dir/usr/lib/lua/luci/$d" && \
-            cp -r "$LUCI_DIR/$d/"* "$data_dir/usr/lib/lua/luci/$d/"
-    done
-    [ -d "$LUCI_DIR/htdocs" ] && mkdir -p "$data_dir/www" && cp -r "$LUCI_DIR/htdocs/"* "$data_dir/www/"
-    if [ -d "$LUCI_DIR/src/view" ]; then
-        mkdir -p "$data_dir/www/luci-static/resources/view"
-        cp -r "$LUCI_DIR/src/view/"* "$data_dir/www/luci-static/resources/view/"
-    fi
-    [ -d "$LUCI_DIR/ucode" ] && mkdir -p "$data_dir/usr/share/ucode/luci" && \
-        cp -r "$LUCI_DIR/ucode/"* "$data_dir/usr/share/ucode/luci/"
-    if [ -d "$LUCI_DIR/po" ]; then
-        mkdir -p "$data_dir/usr/lib/lua/luci/i18n"
-        find "$LUCI_DIR/po" -name "*.po" ! -path "*/templates/*" | while read po; do
-            lang=$(basename "$(dirname "$po")")
-            [ "$lang" = "po" ] && lang="${po##*/}" && lang="${lang%.po}"
-            base="${po##*/}"; base="${base%.po}"
-            po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/${base}.${lang}.lmo" 2>/dev/null || true
-        done
-    fi
-    if [ -z "$(ls -A "$data_dir" 2>/dev/null)" ]; then
-        echo "  ⚠️ LuCI 目录为空，跳过"
-        rm -rf "$data_dir" "$ctrl_dir"
-        return 0
-    fi
-    fix_perms "$data_dir"
-    local size=$(du -sk "$data_dir" | cut -f1)
-    cat > "$ctrl_dir/control" << EOF
+    rm -rf "$data" "$ctrl"
+    mkdir -p "$data" "$ctrl"
+    
+    # luci.mk 标准映射
+    [ -d "$LUCI_DIR/root" ] && cp -a "$LUCI_DIR/root/." "$data/"
+    [ -d "$LUCI_DIR/htdocs" ] && mkdir -p "$data/www" && cp -a "$LUCI_DIR/htdocs/." "$data/www/"
+    [ -d "$LUCI_DIR/luasrc" ] && mkdir -p "$data/usr/lib/lua/luci" && cp -a "$LUCI_DIR/luasrc/." "$data/usr/lib/lua/luci/"
+    [ -d "$LUCI_DIR/ucode" ] && mkdir -p "$data/usr/share/ucode/luci" && cp -a "$LUCI_DIR/ucode/." "$data/usr/share/ucode/luci/"
+    
+    [ -z "$(ls -A "$data" 2>/dev/null)" ] && { rm -rf "$data" "$ctrl"; return 0; }
+    fix_perms "$data"
+    
+    cat > "$ctrl/control" << EOF
 Package: $luci_name
 Version: $PKG_VERSION
 Architecture: all
-Installed-Size: $size
+Installed-Size: $(du -sk "$data" | cut -f1)
 Depends: luci-base${LUCI_DEPS:+, $LUCI_DEPS}
 Description: LuCI support for $PKG_NAME
 EOF
+
+    gen_conffiles "$data" "$ctrl"
     
-    gen_conffiles "$data_dir" "$ctrl_dir"
-    local pkg_file="${luci_name}_${PKG_VERSION}"
     for fmt in ipk apk; do
-        gen_scripts "$ctrl_dir" "$fmt"
-        do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
+        gen_luci_scripts "$ctrl" "$fmt" "$data"
+        do_pack "${luci_name}_${PKG_VERSION}" "$data" "$ctrl" "$fmt"
     done
-    rm -rf "$data_dir" "$ctrl_dir"
+    rm -rf "$data" "$ctrl"
+    
+    # 语言包单独打包
+    [ -d "$LUCI_DIR/po" ] && build_luci_i18n "$luci_base"
+}
+
+gen_luci_scripts() {
+    local ctrl="$1" fmt="$2" data="$3"
+    local post="postinst" pre="prerm" postrm="postrm"
+    [ "$fmt" = "apk" ] && post=".post-install" && pre=".pre-deinstall" && postrm=".post-deinstall"
+    
+    # 检测是否有 init.d 脚本
+    local init_script=$(find "$data/etc/init.d" -type f 2>/dev/null | head -1)
+    local svc=""
+    [ -n "$init_script" ] && svc=$(basename "$init_script")
+    
+    cat > "$ctrl/$post" << EOF
+#!/bin/sh
+rm -f /tmp/luci-indexcache.* 2>/dev/null
+rm -rf /tmp/luci-modulecache/ 2>/dev/null
+/etc/init.d/rpcd reload 2>/dev/null
+EOF
+    [ -n "$svc" ] && cat >> "$ctrl/$post" << EOF
+/etc/init.d/$svc enable 2>/dev/null
+/etc/init.d/$svc restart 2>/dev/null
+EOF
+    echo "exit 0" >> "$ctrl/$post"
+    
+    if [ -n "$svc" ]; then
+        cat > "$ctrl/$pre" << EOF
+#!/bin/sh
+/etc/init.d/$svc disable 2>/dev/null
+/etc/init.d/$svc stop 2>/dev/null
+exit 0
+EOF
+        cat > "$ctrl/$postrm" << EOF
+#!/bin/sh
+rm -f /etc/config/$svc
+rm -rf /etc/$svc
+exit 0
+EOF
+        chmod 755 "$ctrl/$pre" "$ctrl/$postrm"
+    fi
+    chmod 755 "$ctrl/$post"
+}
+
+build_luci_i18n() {
+    local luci_base="$1"
+    
+    for lang_dir in "$LUCI_DIR/po"/*/; do
+        [ -d "$lang_dir" ] || continue
+        local lang=$(basename "$lang_dir")
+        [ "$lang" = "templates" ] && continue
+        
+        # 语言别名 (luci.mk)
+        local lc="$lang"
+        case "$lang" in
+            zh_Hans) lc="zh-cn" ;; zh_Hant) lc="zh-tw" ;; pt_BR) lc="pt-br" ;;
+            bn_BD) lc="bn" ;; nb_NO) lc="no" ;;
+        esac
+        
+        local data="$TEMP_DIR/i18n_data_$$"
+        local ctrl="$TEMP_DIR/i18n_ctrl_$$"
+        rm -rf "$data" "$ctrl"
+        mkdir -p "$data/usr/lib/lua/luci/i18n" "$ctrl"
+        
+        local has_po=false
+        for po in "$lang_dir"*.po; do
+            [ -f "$po" ] || continue
+            po2lmo "$po" "$data/usr/lib/lua/luci/i18n/$(basename "${po%.po}").${lc}.lmo" 2>/dev/null && has_po=true
+        done
+        [ "$has_po" = "false" ] && { rm -rf "$data" "$ctrl"; continue; }
+        
+        fix_perms "$data"
+        
+        local i18n_name="luci-i18n-${luci_base}-${lc}"
+        cat > "$ctrl/control" << EOF
+Package: $i18n_name
+Version: $PKG_VERSION
+Architecture: all
+Installed-Size: $(du -sk "$data" | cut -f1)
+Depends: luci-app-$luci_base
+Description: Translation ($lang)
+EOF
+
+        for fmt in ipk apk; do
+            do_pack "${i18n_name}_${PKG_VERSION}" "$data" "$ctrl" "$fmt"
+        done
+        echo "    📦 $i18n_name"
+        rm -rf "$data" "$ctrl"
+    done
 }
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
 
