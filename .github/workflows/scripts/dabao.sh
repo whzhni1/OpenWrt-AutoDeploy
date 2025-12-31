@@ -7,11 +7,14 @@ PKG_NAME="$1"
 PKG_VERSION="${2#v}"
 BIN_DIR="$3"
 LUCI_DIR="$4"
+
 WORK_DIR="$(pwd)"
 OUT_DIR="$WORK_DIR/output"
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
+
 mkdir -p "$OUT_DIR"
+
 BIN_INSTALL_NAME="${LOCAL_NAME:-$BIN_FILE}"
 DISPLAY_NAME="${LOCAL_NAME:-$PKG_NAME}"
 
@@ -22,6 +25,7 @@ do_upx() {
 fix_perms() {
     find "$1" -type f -exec chmod 644 {} \;
     find "$1" -type f -path "*/bin/*" -exec chmod 755 {} \;
+    find "$1" -type f -path "*/sbin/*" -exec chmod 755 {} \;
     find "$1" -type f -path "*/init.d/*" -exec chmod 755 {} \;
     find "$1" -type f -path "*/uci-defaults/*" -exec chmod 755 {} \;
 }
@@ -37,6 +41,7 @@ gen_conffiles() {
 
 gen_scripts() {
     local ctrl_dir="$1" fmt="$2"
+    
     local post="postinst" pre="prerm" postrm="postrm"
     [ "$fmt" = "apk" ] && post=".post-install" && pre=".pre-deinstall" && postrm=".post-deinstall"
     
@@ -67,11 +72,14 @@ EOF
 do_pack() {
     local pkg_file="$1" data_dir="$2" ctrl_dir="$3" fmt="$4"
     local pkg_dir="$TEMP_DIR/pkg_${fmt}_$$"
+    
     mkdir -p "$pkg_dir"
     echo "2.0" > "$pkg_dir/debian-binary"
+    
     (cd "$ctrl_dir" && tar --owner=root --group=root -czf "$pkg_dir/control.tar.gz" ./)
     (cd "$data_dir" && tar --owner=root --group=root -czf "$pkg_dir/data.tar.gz" ./)
     (cd "$pkg_dir" && tar --owner=root --group=root -czf "$OUT_DIR/${pkg_file}.$fmt" debian-binary control.tar.gz data.tar.gz)
+    
     rm -rf "$pkg_dir"
     echo "  📦 ${pkg_file}.$fmt"
 }
@@ -82,13 +90,19 @@ pack_bin() {
     local data_dir="$TEMP_DIR/data_$$" 
     local ctrl_dir="$TEMP_DIR/ctrl_$$"
     local install_name="${BIN_INSTALL_NAME:-$file_name}"
+    
     echo "  🔧 $file_name → /usr/bin/$install_name (Package: $DISPLAY_NAME)"
+    
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir/usr/bin" "$ctrl_dir"
+    
     do_upx "$bin"
+    
     cp "$bin" "$data_dir/usr/bin/$install_name"
     chmod 755 "$data_dir/usr/bin/$install_name"
+    
     fix_perms "$data_dir"
+    
     local size=$(du -sk "$data_dir" | cut -f1)
     cat > "$ctrl_dir/control" << EOF
 Package: $DISPLAY_NAME
@@ -100,46 +114,71 @@ Description: $PKG_NAME
 EOF
     
     local pkg_file="${file_name}_${PKG_VERSION}"
+    
     for fmt in ipk apk; do
         do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
     done
+    
     rm -rf "$data_dir" "$ctrl_dir"
 }
 
 build_luci() {
     [ -d "$LUCI_DIR" ] || return 0
+    
     local luci_name=$(basename "$LUCI_DIR")
     local data_dir="$TEMP_DIR/luci_data_$$"
     local ctrl_dir="$TEMP_DIR/luci_ctrl_$$"
-    echo "  🔧 LuCI: $luci_name (service: $DISPLAY_NAME)"
+    
+    echo "  🔧 LuCI: $luci_name"
+    
     rm -rf "$data_dir" "$ctrl_dir"
     mkdir -p "$data_dir" "$ctrl_dir"
-    [ -d "$LUCI_DIR/root" ] && cp -r "$LUCI_DIR/root/"* "$data_dir/"
-    if [ -d "$LUCI_DIR/luasrc" ]; then
-        mkdir -p "$data_dir/usr/lib/lua/luci"
-        cp -r "$LUCI_DIR/luasrc/"* "$data_dir/usr/lib/lua/luci/"
+    
+    # 复制 root/（init.d, config, uci-defaults, rpcd/acl.d 等）
+    if [ -d "$LUCI_DIR/root" ]; then
+        cp -a "$LUCI_DIR/root/." "$data_dir/"
+        echo "    ✅ root/"
     fi
     
+    # 复制 htdocs/（JS 版 LuCI）
     if [ -d "$LUCI_DIR/htdocs" ]; then
         mkdir -p "$data_dir/www"
-        cp -r "$LUCI_DIR/htdocs/"* "$data_dir/www/"
+        cp -a "$LUCI_DIR/htdocs/." "$data_dir/www/"
+        echo "    ✅ htdocs/ → www/"
     fi
     
-    if [ -d "$LUCI_DIR/po" ] && [ -n "$LUCI_LANGS" ]; then
+    # 复制 luasrc/（Lua 版 LuCI）
+    if [ -d "$LUCI_DIR/luasrc" ]; then
+        mkdir -p "$data_dir/usr/lib/lua/luci"
+        cp -a "$LUCI_DIR/luasrc/." "$data_dir/usr/lib/lua/luci/"
+        echo "    ✅ luasrc/"
+    fi
+    
+    # 编译所有语言包（自动遍历，不依赖配置）
+    if [ -d "$LUCI_DIR/po" ]; then
         mkdir -p "$data_dir/usr/lib/lua/luci/i18n"
-        for lang in $LUCI_LANGS; do
-            if [ -d "$LUCI_DIR/po/$lang" ]; then
-                for po in "$LUCI_DIR/po/$lang/"*.po; do
-                    [ -f "$po" ] || continue
-                    lmo="${po##*/}"; lmo="${lmo%.po}.$lang.lmo"
-                    po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/$lmo" || true
-                done
-            elif [ -f "$LUCI_DIR/po/$lang.po" ]; then
-                po2lmo "$LUCI_DIR/po/$lang.po" "$data_dir/usr/lib/lua/luci/i18n/$luci_name.$lang.lmo" || true
-            fi
+        for lang_dir in "$LUCI_DIR/po/"*/; do
+            [ -d "$lang_dir" ] || continue
+            lang=$(basename "$lang_dir")
+            [ "$lang" = "templates" ] && continue
+            
+            for po in "$lang_dir"*.po; do
+                [ -f "$po" ] || continue
+                lmo_name="${po##*/}"
+                lmo_name="${lmo_name%.po}.${lang}.lmo"
+                if po2lmo "$po" "$data_dir/usr/lib/lua/luci/i18n/$lmo_name" 2>/dev/null; then
+                    echo "    📝 $lmo_name"
+                fi
+            done
         done
     fi
+    
+    # 显示打包内容
+    echo "    📂 内容:"
+    find "$data_dir" -type f | head -20 | sed 's|^.*data_[0-9]*||'
+    
     fix_perms "$data_dir"
+    
     local size=$(du -sk "$data_dir" | cut -f1)
     cat > "$ctrl_dir/control" << EOF
 Package: $luci_name
@@ -151,13 +190,17 @@ Description: LuCI support for $PKG_NAME
 EOF
     
     gen_conffiles "$data_dir" "$ctrl_dir"
+    
     local pkg_file="${luci_name}_${PKG_VERSION}"
+    
     for fmt in ipk apk; do
         gen_scripts "$ctrl_dir" "$fmt"
         do_pack "$pkg_file" "$data_dir" "$ctrl_dir" "$fmt"
     done
+    
     rm -rf "$data_dir" "$ctrl_dir"
 }
+
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
 
 count=0
@@ -167,6 +210,8 @@ if [ -d "$BIN_DIR" ]; then
     done
 fi
 echo "📊 二进制包: $count 个"
+
 build_luci
+
 echo "📁 输出:"
 ls -la "$OUT_DIR/"
