@@ -10,7 +10,7 @@ projects:
     luci_repo: sbwml/luci-app-openlist2
     local_name: openlist2
     filter: "openlist-linux-*"
-    exclude: ["*.sha256", "*.md5", "*lite.tar.gz"]
+    exclude: ["*.sha256", "*.md5", "*lite.tar.gz", "*.gz"]
     bin_file: openlist
     deps: [ca-bundle]
     configs: [/etc/config/openlist2]
