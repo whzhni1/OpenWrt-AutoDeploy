@@ -8,12 +8,8 @@ projects:
   openlist:
     repo: OpenListTeam/openlist
     luci_repo: sbwml/luci-app-openlist2
-    local_name: openlist2
     filter: "openlist-linux-*"
     exclude: ["*.sha256", "*.md5", "*lite.tar.gz", "*.gz"]
-    bin_file: openlist
-    deps: [ca-bundle]
-    configs: [/etc/config/openlist2]
     platforms: r2 gitlab
 
   vnt:
@@ -21,13 +17,10 @@ projects:
     luci_repo: lmq8267/luci-app-vnt
     filter: "vnt-*-linux-*"
     exclude: ["*-android-*"]
-    bin_file: vnt-cli
     deps: [ca-bundle, kmod-tun]
-    configs: [/etc/config/vnt]
    # upx: off
 
   vnts:
     repo: vnt-dev/vnts
     filter: "vnts-*-linux-*"
-    bin_file: vnts
     deps: [ca-bundle]
