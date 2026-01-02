@@ -12,19 +12,20 @@ TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 mkdir -p "$OUT_DIR"
 
-# 查找目录
+# 查找目录并确定项目名
 LUCI_APP_DIR="" ARCH_PKG_DIR="" PROJ_NAME=""
 if [ -d "$LUCI_SRC" ]; then
     LUCI_APP_DIR=$(find "$LUCI_SRC" -maxdepth 1 -type d -name "luci-app-*" | head -1)
-    for d in "$LUCI_SRC"/*/; do
-        [ -d "$d" ] || continue
-        name=$(basename "$d")
-        [[ "$name" == luci-* ]] && continue
-        [ -f "$d/Makefile" ] && { ARCH_PKG_DIR="$d"; PROJ_NAME="$name"; break; }
-    done
+    if [ -n "$LUCI_APP_DIR" ]; then
+        PROJ_NAME="${LUCI_APP_DIR##*luci-app-}"
+        [ -d "$LUCI_SRC/$PROJ_NAME" ] && [ -f "$LUCI_SRC/$PROJ_NAME/Makefile" ] && ARCH_PKG_DIR="$LUCI_SRC/$PROJ_NAME"
+    fi
 fi
-[ -z "$PROJ_NAME" ] && [ -n "$LUCI_APP_DIR" ] && PROJ_NAME="${LUCI_APP_DIR##*luci-app-}"
 [ -z "$PROJ_NAME" ] && PROJ_NAME="$PKG_NAME"
+
+# 输出项目名供工作流使用
+echo "$PROJ_NAME" > "$OUT_DIR/.proj_name"
+echo "📌 项目名: $PROJ_NAME"
 
 # 从 Makefile 提取二进制名
 get_bin_name() {
@@ -125,7 +126,6 @@ build_arch_pkg() {
     for arch_dir in "$BIN_DIR"/*/; do
         [ -d "$arch_dir" ] || continue
         
-        # 查找二进制：优先匹配 Makefile 中的名字，否则匹配项目名，最后取第一个可执行文件
         local bin=$(find "$arch_dir" -name "$bin_name" -type f 2>/dev/null | head -1)
         [ -z "$bin" ] && bin=$(find "$arch_dir" -name "$PROJ_NAME" -type f 2>/dev/null | head -1)
         [ -z "$bin" ] && bin=$(find "$arch_dir" -type f -executable 2>/dev/null | head -1)
@@ -199,7 +199,6 @@ build_luci() {
     echo "  🔧 LuCI: $luci_name (v$luci_ver)"
     rm -rf "$data" "$ctrl" && mkdir -p "$data" "$ctrl"
     
-    # 复制 root 但排除 init.d 和 config（已移到架构包）
     if [ -d "$LUCI_APP_DIR/root" ]; then
         cp -a "$LUCI_APP_DIR/root/." "$data/"
         rm -rf "$data/etc/init.d" "$data/etc/config"
