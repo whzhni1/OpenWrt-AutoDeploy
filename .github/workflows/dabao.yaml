@@ -177,7 +177,10 @@ jobs:
           
           .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
           
-          export REPO_NAME="$proj"
+          # 从 dabao.sh 获取实际项目名
+          PROJ_NAME=$(cat output/.proj_name 2>/dev/null || echo "$proj")
+          
+          export REPO_NAME="$PROJ_NAME"
           export TAG_NAME="$LATEST"
           export DOWNLOAD_DIR="output"
           export PLATFORMS="$(cfg_def platforms "$(def platforms)")"
