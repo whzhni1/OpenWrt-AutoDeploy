@@ -45,13 +45,11 @@ jobs:
           
           for proj in $PROJECTS; do
             REPO=$(yq e ".projects.$proj.repo" "$CONFIG_FILE")
-            LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"\"" "$CONFIG_FILE")
-            VERSION_NAME="${LOCAL_NAME:-$proj}"
             
             LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && continue
             
-            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$VERSION_NAME" 2>/dev/null || echo "")
+            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$proj" 2>/dev/null || echo "")
             LATEST_CLEAN="${LATEST#v}"
             CURRENT_CLEAN="${CURRENT#v}"
             
@@ -69,6 +67,7 @@ jobs:
           MATRIX="$MATRIX]"
           echo "result=$MATRIX" >> $GITHUB_OUTPUT
           echo "📋 矩阵: $MATRIX"
+
   build:
     needs: prepare
     if: needs.prepare.outputs.matrix != '[]'
@@ -90,6 +89,7 @@ jobs:
           make -C /tmp/luci/modules/luci-base/src po2lmo
           sudo cp /tmp/luci/modules/luci-base/src/po2lmo /usr/local/bin/
           chmod +x .github/workflows/scripts/*.sh
+
       - name: 处理 ${{ matrix.project }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,8 +113,7 @@ jobs:
           def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
           
           REPO=$(cfg repo)
-          LOCAL_NAME=$(cfg local_name)
-          BIN_FILE=$(cfg bin_file)
+          LUCI_REPO=$(cfg luci_repo)
           FILTER=$(cfg filter)
           
           mkdir -p downloads bins output
@@ -143,7 +142,7 @@ jobs:
           
           echo "📂 下载: $(ls downloads | wc -l) 个"
           
-          echo "📦 解压 (bin_file: $BIN_FILE)"
+          echo "📦 解压"
           for f in downloads/*; do
             [ -f "$f" ] || continue
             tmp=$(mktemp -d)
@@ -156,43 +155,29 @@ jobs:
               *) cp "$f" "$tmp/" ;;
             esac
             
-            if [ -n "$BIN_FILE" ]; then
-              bin=$(find "$tmp" -name "$BIN_FILE" -type f | head -1)
-            else
-              bin=$(find "$tmp" -type f -executable | head -1)
-            fi
-            
-            if [ -n "$bin" ]; then
-              out=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
-              cp "$bin" "bins/$out"
-              chmod +x "bins/$out"
-              echo "  ✅ $out"
-            fi
+            arch_name=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
+            mkdir -p "bins/$arch_name"
+            find "$tmp" -type f -executable -exec cp {} "bins/$arch_name/" \;
             rm -rf "$tmp"
+            echo "  ✅ $arch_name"
           done
           
-          echo "📂 二进制: $(ls bins | wc -l) 个"
+          echo "📂 架构目录: $(ls bins | wc -l) 个"
           
-          LUCI_REPO=$(cfg luci_repo)
           LUCI_DIR=""
           if [ -n "$LUCI_REPO" ]; then
             echo "📥 LuCI: $LUCI_REPO"
             git clone --depth 1 "https://github.com/$LUCI_REPO.git" luci-src
-            LUCI_DIR=$(find luci-src -maxdepth 1 -type d -name "luci-app-*" | head -1)
-            [ -z "$LUCI_DIR" ] && LUCI_DIR="luci-src"
+            LUCI_DIR="luci-src"
           fi
           
           export PKG_DEPS="$(cfg_arr deps)"
-          export PKG_CONFIGS="$(cfg_arr configs)"
           export PKG_UPX="$(cfg_def upx true)"
-          export BIN_FILE
-          export LOCAL_NAME
-          export LUCI_LANGS="$(cfg_arr luci_langs)"
           export LUCI_DEPS="$(cfg_arr luci_deps)"
           
           .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
           
-          export REPO_NAME="${LOCAL_NAME:-$proj}"
+          export REPO_NAME="$proj"
           export TAG_NAME="$LATEST"
           export DOWNLOAD_DIR="output"
           export PLATFORMS="$(cfg_def platforms "$(def platforms)")"
@@ -201,13 +186,12 @@ jobs:
           .github/workflows/scripts/release.sh
           
           echo "✅ $proj 完成"
+
       - name: 保存版本
         if: success()
         run: |
           proj="${{ matrix.project }}"
-          LOCAL_NAME=$(yq e ".projects.$proj.local_name // \"\"" "$CONFIG_FILE")
-          VERSION_NAME="${LOCAL_NAME:-$proj}"
-          .github/workflows/scripts/version-manager.sh write "$VERSION_NAME" "${{ matrix.version }}"
+          .github/workflows/scripts/version-manager.sh write "$proj" "${{ matrix.version }}"
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
