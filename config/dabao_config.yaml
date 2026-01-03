@@ -9,8 +9,8 @@ projects:
     repo: OpenListTeam/openlist
     luci_repo: sbwml/luci-app-openlist2
    # filter: "openlist-linux-*"
-    filter: "openlist-linux-arm64.tar.gz"
-    exclude: ["*.sha256", "*.md5", "*lite.tar.gz"]
+    filter: "openlist-darwin-arm64-lite.tar.gz"
+    # exclude: ["*.sha256", "*.md5", "*lite.tar.gz"]
     platforms: r2 gitlab
 
   vnt:
