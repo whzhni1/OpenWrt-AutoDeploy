@@ -64,16 +64,16 @@ do_pack() {
     echo "  📦 ${pkg_file}.$fmt"
 }
 
-# 解析 Makefile install
+# 解析 Makefile install（尽量保留已有逻辑）
 parse_install() {
     local makefile="$1" data="$2" pkg_dir="$3"
     local in_block=false
-    
+
     while IFS= read -r line; do
         [[ "$line" =~ ^[[:space:]]*define[[:space:]]+Package/.*/install ]] && { in_block=true; continue; }
         [[ "$line" =~ ^endef ]] && { in_block=false; continue; }
         [ "$in_block" = "false" ] && continue
-        
+
         if [[ "$line" =~ \$\(INSTALL_DIR\)[[:space:]]+\$\(1\)(/[^[:space:]]+) ]]; then
             mkdir -p "$data${BASH_REMATCH[1]}"
         elif [[ "$line" =~ \$\(INSTALL_BIN\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]+) ]]; then
@@ -103,76 +103,106 @@ get_bin_dst() {
     [ -f "$1" ] && grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_BUILD_DIR\)/[^[:space:]]+\s+\$\(1\)\K/[^[:space:]]+' "$1" | head -1
 }
 
+# 复用 control 文件生成
+write_control() {
+    local ctrl_dir="$1"; local pkg="$2"; local ver="$3"; local arch="$4"; local deps="$5"; local desc="$6"; local data_dir="$7"
+    local size="0"
+    [ -n "$data_dir" ] && [ -d "$data_dir" ] && size=$(du -sk "$data_dir" | cut -f1)
+    cat > "$ctrl_dir/control" << EOF
+Package: $pkg
+Version: $ver
+Architecture: $arch
+Installed-Size: $size
+Depends: $deps
+Description: $desc
+EOF
+}
+
 # 架构包
 build_arch_pkg() {
     [ -d "$ARCH_PKG_DIR" ] && [ -f "$ARCH_PKG_DIR/Makefile" ] || return 0
-    
+
     local base_data="$TEMP_DIR/arch_base_$$"
     rm -rf "$base_data" && mkdir -p "$base_data"
-    
+
     echo "  🔧 架构包: $PROJ_NAME"
+
+    # 先解析 Makefile 安装指令到 base_data
     parse_install "$ARCH_PKG_DIR/Makefile" "$base_data" "$ARCH_PKG_DIR"
-    
-    # 合并 luci-app 的 init.d 和 config
+
+    # 处理 ARCH_PKG_DIR/files 目录（复制 files 下的内容到 base_data）
+    if [ -d "$ARCH_PKG_DIR/files" ]; then
+        # 保证 files 中的相对路径直接映射到 base_data 根
+        cp -a "$ARCH_PKG_DIR/files/." "$base_data/" 2>/dev/null || true
+    fi
+
+    # 合并 luci-app 的 init.d 和 config（优先使用 luci-app 的 root 文件）
     [ -d "$LUCI_APP_DIR/root/etc/init.d" ] && mkdir -p "$base_data/etc/init.d" && cp -a "$LUCI_APP_DIR/root/etc/init.d/"* "$base_data/etc/init.d/" 2>/dev/null || true
     [ -d "$LUCI_APP_DIR/root/etc/config" ] && mkdir -p "$base_data/etc/config" && cp -a "$LUCI_APP_DIR/root/etc/config/"* "$base_data/etc/config/" 2>/dev/null || true
-    
+
     local bin_dst=$(get_bin_dst "$ARCH_PKG_DIR/Makefile")
     [ -z "$bin_dst" ] && bin_dst="/usr/bin/$PROJ_NAME"
     local bin_name=$(get_bin_name "$ARCH_PKG_DIR/Makefile")
     [ -z "$bin_name" ] && bin_name="$PROJ_NAME"
     local init_name=$(find "$base_data/etc/init.d" -type f 2>/dev/null | head -1 | xargs -r basename)
-    
+
     for arch_dir in "$BIN_DIR"/*/; do
         [ -d "$arch_dir" ] || continue
-        
+
         local bin=$(find "$arch_dir" -name "$bin_name" -type f 2>/dev/null | head -1)
         [ -z "$bin" ] && bin=$(find "$arch_dir" -name "$PROJ_NAME" -type f 2>/dev/null | head -1)
         [ -z "$bin" ] && bin=$(find "$arch_dir" -type f -executable 2>/dev/null | head -1)
         [ -z "$bin" ] && continue
-        
+
         local arch_name=$(basename "$arch_dir")
         local data="$TEMP_DIR/arch_${arch_name}_$$"
         local ctrl="$TEMP_DIR/arch_ctrl_$$"
-        
+
         cp -a "$base_data" "$data"
         rm -rf "$ctrl" && mkdir -p "$ctrl" "$data$(dirname "$bin_dst")"
         do_upx "$bin"
         cp "$bin" "$data$bin_dst" && chmod 755 "$data$bin_dst"
         fix_perms "$data"
-        
-        # conffiles
-        find "$data/etc/config" -type f 2>/dev/null | sed "s|^$data||" > "$ctrl/conffiles"
+
+        # conffiles：列出 /etc/config 下的文件（相对路径）
+        if [ -d "$data/etc/config" ]; then
+            (cd "$data" && find etc/config -type f 2>/dev/null | sed "s|^|/|") > "$ctrl/conffiles" || true
+        fi
         [ -s "$ctrl/conffiles" ] || rm -f "$ctrl/conffiles"
-        
-        cat > "$ctrl/control" << EOF
-Package: $PROJ_NAME
-Version: $PKG_VERSION
-Architecture: all
-Installed-Size: $(du -sk "$data" | cut -f1)
-Depends: libc${PKG_DEPS:+, $PKG_DEPS}
-Description: $PROJ_NAME
-EOF
-        
+
+        # 生成 control 文件（架构包应使用具体架构）
+        local deps="libc${PKG_DEPS:+, $PKG_DEPS}"
+        write_control "$ctrl" "$PROJ_NAME" "$PKG_VERSION" "$arch_name" "$deps" "$PROJ_NAME" "$data"
+
+        # 生成 maintainer 脚本（postinst, prerm, postrm）
         for fmt in ipk apk; do
             local post="postinst" pre="prerm" postrm="postrm"
             [ "$fmt" = "apk" ] && post=".post-install" pre=".pre-deinstall" postrm=".post-deinstall"
-            
+
+            # postinst：创建配置文件、刷新 luci 缓存、reload rpcd、enable/restart init
             cat > "$ctrl/$post" << EOF
 #!/bin/sh
 [ -f "/etc/config/$PROJ_NAME" ] || touch /etc/config/$PROJ_NAME
 rm -f /tmp/luci-indexcache.* 2>/dev/null; rm -rf /tmp/luci-modulecache/ 2>/dev/null
 /etc/init.d/rpcd reload 2>/dev/null
-${init_name:+/etc/init.d/$init_name enable 2>/dev/null}
-${init_name:+/etc/init.d/$init_name restart 2>/dev/null}
+if [ -n "$init_name" ] && [ -x "/etc/init.d/$init_name" ]; then
+    /etc/init.d/$init_name enable 2>/dev/null || true
+    /etc/init.d/$init_name restart 2>/dev/null || true
+fi
 exit 0
 EOF
+
+            # prerm：disable/stop init
             cat > "$ctrl/$pre" << EOF
 #!/bin/sh
-${init_name:+/etc/init.d/$init_name disable 2>/dev/null}
-${init_name:+/etc/init.d/$init_name stop 2>/dev/null}
+if [ -n "$init_name" ] && [ -x "/etc/init.d/$init_name" ]; then
+    /etc/init.d/$init_name disable 2>/dev/null || true
+    /etc/init.d/$init_name stop 2>/dev/null || true
+fi
 exit 0
 EOF
+
+            # postrm：删除配置与 i18n/luci 相关包（尽量安全）
             cat > "$ctrl/$postrm" << EOF
 #!/bin/sh
 rm -f /etc/config/$PROJ_NAME; rm -rf /etc/config/${PROJ_NAME}_data
@@ -190,35 +220,31 @@ EOF
 # LuCI 包
 build_luci() {
     [ -d "$LUCI_APP_DIR" ] || return 0
-    
+
     local luci_name=$(basename "$LUCI_APP_DIR")
     local luci_base="${luci_name#luci-app-}"
     local luci_ver=$(get_luci_version); [ -z "$luci_ver" ] && luci_ver="$PKG_VERSION"
     local data="$TEMP_DIR/luci_data_$$" ctrl="$TEMP_DIR/luci_ctrl_$$"
-    
+
     echo "  🔧 LuCI: $luci_name (v$luci_ver)"
     rm -rf "$data" "$ctrl" && mkdir -p "$data" "$ctrl"
-    
+
     if [ -d "$LUCI_APP_DIR/root" ]; then
         cp -a "$LUCI_APP_DIR/root/." "$data/"
+        # 保留 init.d 与 config 到 arch 包，不在 luci 包重复放置
         rm -rf "$data/etc/init.d" "$data/etc/config"
     fi
     [ -d "$LUCI_APP_DIR/htdocs" ] && mkdir -p "$data/www" && cp -a "$LUCI_APP_DIR/htdocs/." "$data/www/"
     [ -d "$LUCI_APP_DIR/luasrc" ] && mkdir -p "$data/usr/lib/lua/luci" && cp -a "$LUCI_APP_DIR/luasrc/." "$data/usr/lib/lua/luci/"
     [ -d "$LUCI_APP_DIR/ucode" ] && mkdir -p "$data/usr/share/ucode/luci" && cp -a "$LUCI_APP_DIR/ucode/." "$data/usr/share/ucode/luci/"
-    
+
     [ -z "$(ls -A "$data" 2>/dev/null)" ] && { rm -rf "$data" "$ctrl"; return 0; }
     fix_perms "$data"
-    
-    cat > "$ctrl/control" << EOF
-Package: $luci_name
-Version: $luci_ver
-Architecture: all
-Installed-Size: $(du -sk "$data" | cut -f1)
-Depends: $PROJ_NAME, luci-base${LUCI_DEPS:+, $LUCI_DEPS}
-Description: LuCI support for $PROJ_NAME
-EOF
-    
+
+    # luci 包依赖核心包（使用 PROJ_NAME）
+    local deps="$PROJ_NAME, luci-base${LUCI_DEPS:+, $LUCI_DEPS}"
+    write_control "$ctrl" "$luci_name" "$luci_ver" "all" "$deps" "LuCI support for $PROJ_NAME" "$data"
+
     for fmt in ipk apk; do
         local post="postinst"; [ "$fmt" = "apk" ] && post=".post-install"
         cat > "$ctrl/$post" << 'EOF'
@@ -231,37 +257,33 @@ EOF
         do_pack "${luci_name}_${luci_ver}" "$data" "$ctrl" "$fmt"
     done
     rm -rf "$data" "$ctrl"
-    
-    [ -d "$LUCI_APP_DIR/po" ] && build_luci_i18n "$luci_base" "$luci_ver"
+
+    [ -d "$LUCI_APP_DIR/po" ] && build_luci_i18n "$luci_name" "$luci_ver"
 }
 
 # 语言包
 build_luci_i18n() {
-    local luci_base="$1" luci_ver="$2"
+    local luci_name="$1" luci_ver="$2"
+    local luci_base="${luci_name#luci-app-}"
     for lang_dir in "$LUCI_APP_DIR/po"/*/; do
         [ -d "$lang_dir" ] || continue
         local lang=$(basename "$lang_dir"); [ "$lang" = "templates" ] && continue
         local lc="$lang"
         case "$lang" in zh_Hans) lc="zh-cn";; zh_Hant) lc="zh-tw";; pt_BR) lc="pt-br";; bn_BD) lc="bn";; nb_NO) lc="no";; esac
-        
+
         local data="$TEMP_DIR/i18n_data_$$" ctrl="$TEMP_DIR/i18n_ctrl_$$"
         rm -rf "$data" "$ctrl" && mkdir -p "$data/usr/lib/lua/luci/i18n" "$ctrl"
-        
+
         local has_po=false
         for po in "$lang_dir"*.po; do
             [ -f "$po" ] && po2lmo "$po" "$data/usr/lib/lua/luci/i18n/$(basename "${po%.po}").${lc}.lmo" 2>/dev/null && has_po=true
         done
         [ "$has_po" = "false" ] && { rm -rf "$data" "$ctrl"; continue; }
-        
+
         local i18n_name="luci-i18n-${luci_base}-${lc}"
-        cat > "$ctrl/control" << EOF
-Package: $i18n_name
-Version: $luci_ver
-Architecture: all
-Installed-Size: $(du -sk "$data" | cut -f1)
-Depends: luci-app-$luci_base
-Description: Translation ($lang)
-EOF
+        # 语言包依赖 luci-app 包本身（使用 luci_name）
+        write_control "$ctrl" "$i18n_name" "$luci_ver" "all" "$luci_name" "Translation ($lang)" "$data"
+
         for fmt in ipk apk; do do_pack "${i18n_name}_${luci_ver}" "$data" "$ctrl" "$fmt"; done
         echo "    📦 $i18n_name"
         rm -rf "$data" "$ctrl"
@@ -271,29 +293,24 @@ EOF
 # 简单二进制（无架构包）
 pack_simple_bin() {
     [ -d "$ARCH_PKG_DIR" ] && return 0
-    
+
     for arch_dir in "$BIN_DIR"/*/; do
         [ -d "$arch_dir" ] || continue
-        
+
         local bin=$(find "$arch_dir" -name "$PKG_NAME" -type f 2>/dev/null | head -1)
         [ -z "$bin" ] && bin=$(find "$arch_dir" -type f -executable 2>/dev/null | head -1)
         [ -z "$bin" ] && continue
-        
+
         local arch_name=$(basename "$arch_dir")
         local data="$TEMP_DIR/bin_data_$$" ctrl="$TEMP_DIR/bin_ctrl_$$"
         rm -rf "$data" "$ctrl" && mkdir -p "$data/usr/bin" "$ctrl"
-        
+
         do_upx "$bin"
         cp "$bin" "$data/usr/bin/$PKG_NAME" && chmod 755 "$data/usr/bin/$PKG_NAME"
-        
-        cat > "$ctrl/control" << EOF
-Package: $PKG_NAME
-Version: $PKG_VERSION
-Architecture: all
-Installed-Size: $(du -sk "$data" | cut -f1)
-Depends: libc${PKG_DEPS:+, $PKG_DEPS}
-Description: $PKG_NAME
-EOF
+
+        local deps="libc${PKG_DEPS:+, $PKG_DEPS}"
+        write_control "$ctrl" "$PKG_NAME" "$PKG_VERSION" "all" "$deps" "$PKG_NAME" "$data"
+
         for fmt in ipk apk; do do_pack "${arch_name}_${PKG_VERSION}" "$data" "$ctrl" "$fmt"; done
         rm -rf "$data" "$ctrl"
     done
