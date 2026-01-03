@@ -111,7 +111,7 @@ write_control() {
     cat > "$ctrl_dir/control" << EOF
 Package: $pkg
 Version: $ver
-Architecture: $arch
+Architecture: all
 Installed-Size: $size
 Depends: $deps
 Description: $desc
