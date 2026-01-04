@@ -143,34 +143,13 @@ jobs:
         if: steps.compile.outcome == 'success'
         id: collect
         run: |
-          TYPE="${{ matrix.type }}"
-          PROJ_NAME="${{ steps.prep.outputs.proj_name }}"
-          VERSION="${{ matrix.version }}"
-          ARCH="${{ matrix.arch }}"
-          
           mkdir -p output
-          find bin/packages -type f -name "*.ipk" -exec cp {} output/ \; || true
-          for ipk in output/*.ipk; do
-            [ -f "$ipk" ] || continue
-            apk="${ipk%.ipk}.apk"
-            
-            mkdir -p apk-tmp
-            tar -xzf "$ipk" -C apk-tmp 2>/dev/null || continue
-            tar -xzf apk-tmp/control.tar.gz -C apk-tmp 2>/dev/null || true
-            
-            pkg_name=$(grep "^Package:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$PROJ_NAME")
-            pkg_ver=$(grep "^Version:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$VERSION")
-            pkg_arch=$(grep "^Architecture:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$ARCH")
-            
-            printf '%s\n' "pkgname = $pkg_name" "pkgver = $pkg_ver" "arch = $pkg_arch" "license = MIT" > apk-tmp/.PKGINFO
-            (cd apk-tmp && tar -czf "../$apk" .PKGINFO control.tar.gz data.tar.gz 2>/dev/null) || true
-            rm -rf apk-tmp
-          done
-          
-          count=$(ls output/*.ipk output/*.apk 2>/dev/null | wc -l || echo 0)
+          cp bin/packages/*/packages_ci/*.ipk output/ 2>/dev/null || true
+          cp bin/packages/*/packages_ci/*.apk output/ 2>/dev/null || true
+          count=$(ls -1 output/ 2>/dev/null | wc -l)
           echo "count=$count" >> $GITHUB_OUTPUT
           echo "📦 产物: $count 个"
-          ls -lh output/ 2>/dev/null || true
+          ls -lh output/
 
       - name: 发布
         if: steps.collect.outputs.count != '0'
