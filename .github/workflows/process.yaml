@@ -41,10 +41,8 @@ jobs:
           
           [ -n "$INPUT_PROJECTS" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^($(echo "$INPUT_PROJECTS" | tr ',' '|'))$" || true)
           
-          BUILD_MATRIX='{"include":['
-          RELEASE_MATRIX='{"include":['
-          build_first=true
-          release_first=true
+          BUILD_ITEMS=()
+          RELEASE_ITEMS=()
           
           for proj in $PROJECTS; do
             SOURCE_REPO=$(yq e ".projects.$proj.source_repo" "$CONFIG_FILE")
@@ -64,33 +62,34 @@ jobs:
             
             echo "✅ $proj: $CURRENT → $LATEST"
             
-            # 添加到发布矩阵
-            $release_first && release_first=false || RELEASE_MATRIX+=","
-            RELEASE_MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\"}"
+            RELEASE_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\"}")
             
-            # LuCI job
+            # LuCI 编译两种格式（x86_64 固定，遍历 SDK）
             if [ -n "$LUCI_REPO" ]; then
-              $build_first && build_first=false || BUILD_MATRIX+=","
-              BUILD_MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"x86_64\",\"sdk\":\"SNAPSHOT\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":false}"
+              for sdk in $SDKS; do
+                BUILD_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"x86_64\",\"sdk\":\"$sdk\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":false}")
+              done
             fi
             
-            # 架构包 jobs
+            # 架构包（arch × sdk）
             for arch in $ARCHS; do
               arch_upx=$UPX
               [ -n "$UPX_EXCLUDE" ] && [[ "$arch" =~ ^($UPX_EXCLUDE)$ ]] && arch_upx=false
               
               for sdk in $SDKS; do
-                $build_first && build_first=false || BUILD_MATRIX+=","
-                BUILD_MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"sdk\":\"$sdk\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":$arch_upx}"
+                BUILD_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"sdk\":\"$sdk\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":$arch_upx}")
               done
             done
           done
           
-          BUILD_MATRIX+=']}'
-          RELEASE_MATRIX+=']}'
+          BUILD_MATRIX="{\"include\":[$(IFS=,; echo "${BUILD_ITEMS[*]}")]}"
+          RELEASE_MATRIX="{\"include\":[$(IFS=,; echo "${RELEASE_ITEMS[*]}")]}"
           
           echo "build_matrix=$BUILD_MATRIX" >> $GITHUB_OUTPUT
           echo "release_matrix=$RELEASE_MATRIX" >> $GITHUB_OUTPUT
+          
+          echo "📊 编译任务: ${#BUILD_ITEMS[@]} 个"
+          echo "📊 发布任务: ${#RELEASE_ITEMS[@]} 个"
 
   build:
     needs: prepare
@@ -116,7 +115,7 @@ jobs:
           echo "📦 ${{ matrix.project }} ${{ matrix.version }} [${{ matrix.type }}] (${{ matrix.arch }}-${{ matrix.sdk }})"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          mkdir -p feeds/packages output
+          mkdir -p feeds/packages
           PROJ_NAME="${{ matrix.project }}"
           
           if [ -n "${{ matrix.luci_repo }}" ]; then
@@ -162,19 +161,18 @@ jobs:
           ARCH="${{ matrix.arch }}"
           PROJ="${{ steps.prep.outputs.proj_name }}"
           SDK="${{ matrix.sdk }}"
+          TYPE="${{ matrix.type }}"
           
-          if [ "$ARCH" = "riscv64_riscv64" ] && [ "$SDK" = "SNAPSHOT" ]; then
-            PKG_DIR="bin/packages/riscv64_generic/packages_ci"
-          else
-            PKG_DIR="bin/packages/$ARCH/packages_ci"
-          fi
+          PKG_DIR="bin/packages/$ARCH/packages_ci"
+          [ "$ARCH" = "riscv64_riscv64" ] && [ "$SDK" = "SNAPSHOT" ] && PKG_DIR="bin/packages/riscv64_generic/packages_ci"
           
           for pkg in "$PKG_DIR"/*.{ipk,apk}; do
             [ -f "$pkg" ] || continue
             filename=$(basename "$pkg")
             
             if [[ "$filename" == "$PROJ-"* ]] || [[ "$filename" == "luci-app-$PROJ-"* ]] || [[ "$filename" == "luci-i18n-$PROJ-"* ]]; then
-              newname=$(echo "$filename" | sed -E "s/-r[0-9]+\./-$ARCH./")
+              # LuCI 保持原名，架构包添加架构后缀
+              [ "$TYPE" = "luci" ] && newname="$filename" || newname=$(echo "$filename" | sed -E "s/-r[0-9]+\./-$ARCH./")
               cp "$pkg" "output/$newname"
             fi
           done
@@ -188,7 +186,7 @@ jobs:
         if: steps.collect.outputs.count != '0'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.project }}-${{ matrix.arch }}-${{ matrix.sdk }}
+          name: ${{ matrix.project }}-${{ matrix.type }}-${{ matrix.arch }}-${{ matrix.sdk }}
           path: output/
           retention-days: 1
 
@@ -229,11 +227,8 @@ jobs:
           
           [ "$count" -eq 0 ] && echo "⚠️ 无产物，跳过发布" && exit 0
           
-          # 获取实际项目名（处理 luci_repo 情况）
           PROJ_NAME="${{ matrix.project }}"
-          if [ -n "${{ matrix.luci_repo }}" ]; then
-            PROJ_NAME=$(basename "$(find output -name "luci-app-*" | head -1 | sed 's/.*luci-app-\([^-]*\).*/\1/')" 2>/dev/null || echo "$PROJ_NAME")
-          fi
+          [ -n "${{ matrix.luci_repo }}" ] && LUCI_NAME=$(ls output/ | grep -oP 'luci-app-\K[^-]+' | head -1) && [ -n "$LUCI_NAME" ] && PROJ_NAME="$LUCI_NAME"
           
           export REPO_NAME="$PROJ_NAME"
           export TAG_NAME="${{ matrix.version }}"
@@ -244,9 +239,7 @@ jobs:
           .github/workflows/scripts/release.sh
 
       - name: 记录版本
-        run: |
-          mkdir -p /tmp/version-info
-          echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
+        run: mkdir -p /tmp/version-info && echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
 
       - uses: actions/upload-artifact@v4
         with:
@@ -297,5 +290,5 @@ jobs:
         with:
           name: |
             version-*
-            *-*-*
+            *-*-*-*
           failOnError: false
