@@ -170,12 +170,7 @@ jobs:
             pkg_ver=$(grep "^Version:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$VERSION")
             pkg_arch=$(grep "^Architecture:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$ARCH")
             
-            cat > apk-tmp/.PKGINFO << EOF
-pkgname = $pkg_name
-pkgver = $pkg_ver
-arch = $pkg_arch
-license = MIT
-EOF
+            printf '%s\n' "pkgname = $pkg_name" "pkgver = $pkg_ver" "arch = $pkg_arch" "license = MIT" > apk-tmp/.PKGINFO
             (cd apk-tmp && tar -czf "../$apk" .PKGINFO control.tar.gz data.tar.gz 2>/dev/null) || true
             rm -rf apk-tmp
           done
