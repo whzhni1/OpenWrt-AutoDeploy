@@ -35,6 +35,7 @@ jobs:
           
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
           ARCHS=$(yq e '.defaults.archs | .[]' "$CONFIG_FILE")
+          FIRST_ARCH=$(echo "$ARCHS" | head -1)
           
           [ -n "$INPUT_PROJECTS" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^($(echo "$INPUT_PROJECTS" | tr ',' '|'))$" || true)
           
@@ -59,7 +60,7 @@ jobs:
             
             echo "✅ $proj: $CURRENT → $LATEST"
             
-            # LuCI job（如果有 luci_repo）
+            # LuCI job
             if [ -n "$LUCI_REPO" ]; then
               [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
               MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"all\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":\"false\"}"
@@ -68,7 +69,7 @@ jobs:
             # 架构包 jobs
             for arch in $ARCHS; do
               [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
-              MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":\"$UPX\"}"
+              MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":\"$UPX\",\"save_version\":\"$([ "$arch" = "$FIRST_ARCH" ] && echo true || echo false)\"}"
             done
           done
           
@@ -102,7 +103,6 @@ jobs:
           
           mkdir -p feeds/packages output
           PROJ_NAME="${{ matrix.project }}"
-          PACKAGES=""
           
           if [ -n "${{ matrix.luci_repo }}" ]; then
             git clone --depth 1 "https://github.com/${{ matrix.luci_repo }}.git" luci-repo
@@ -118,7 +118,6 @@ jobs:
           
           [ ! -d "feeds/packages/$PROJ_NAME" ] && mkdir -p "feeds/packages/$PROJ_NAME"
           
-          # 根据类型决定编译哪些包
           if [ "$TYPE" = "luci" ]; then
             PACKAGES="luci-app-$PROJ_NAME"
           else
@@ -146,20 +145,42 @@ jobs:
         run: |
           TYPE="${{ matrix.type }}"
           PROJ_NAME="${{ steps.prep.outputs.proj_name }}"
+          VERSION="${{ matrix.version }}"
+          ARCH="${{ matrix.arch }}"
           
           mkdir -p output
           
           if [ "$TYPE" = "luci" ]; then
-            # 只收集 luci 相关包
             find bin/packages -name "luci-app-${PROJ_NAME}*.ipk" -exec cp {} output/ \; 2>/dev/null || true
             find bin/packages -name "luci-i18n-${PROJ_NAME}*.ipk" -exec cp {} output/ \; 2>/dev/null || true
           else
-            # 只收集架构包
             find bin/packages -name "${PROJ_NAME}_*.ipk" -exec cp {} output/ \; 2>/dev/null || true
             find bin/packages -name "${PROJ_NAME}-*.ipk" -exec cp {} output/ \; 2>/dev/null || true
           fi
           
-          count=$(ls output/*.ipk 2>/dev/null | wc -l || echo 0)
+          for ipk in output/*.ipk; do
+            [ -f "$ipk" ] || continue
+            apk="${ipk%.ipk}.apk"
+            
+            mkdir -p apk-tmp
+            tar -xzf "$ipk" -C apk-tmp 2>/dev/null || continue
+            tar -xzf apk-tmp/control.tar.gz -C apk-tmp 2>/dev/null || true
+            
+            pkg_name=$(grep "^Package:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$PROJ_NAME")
+            pkg_ver=$(grep "^Version:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$VERSION")
+            pkg_arch=$(grep "^Architecture:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$ARCH")
+            
+            cat > apk-tmp/.PKGINFO << EOF
+pkgname = $pkg_name
+pkgver = $pkg_ver
+arch = $pkg_arch
+license = MIT
+EOF
+            (cd apk-tmp && tar -czf "../$apk" .PKGINFO control.tar.gz data.tar.gz 2>/dev/null) || true
+            rm -rf apk-tmp
+          done
+          
+          count=$(ls output/*.ipk output/*.apk 2>/dev/null | wc -l || echo 0)
           echo "count=$count" >> $GITHUB_OUTPUT
           echo "📦 产物: $count 个"
           ls -lh output/ 2>/dev/null || true
@@ -184,21 +205,67 @@ jobs:
           export USERNAME="$(yq e '.defaults.username' "$CONFIG_FILE")"
           .github/workflows/scripts/release.sh
 
-      - name: 保存版本
-        if: steps.collect.outputs.count != '0'
-        continue-on-error: true
-        run: |
-          .github/workflows/scripts/version-manager.sh write "${{ matrix.project }}" "${{ matrix.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          for i in 1 2 3; do
-            git pull --rebase || true
-            git add config/version.txt
-            git diff --cached --quiet || git commit -m "📦 ${{ matrix.project }} → ${{ matrix.version }}"
-            git push && break || sleep $((i * 3))
-          done
+      - name: 上传版本信息
+        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-${{ matrix.project }}
+          path: |
+            echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/update.txt
+            /tmp/update.txt
+          retention-days: 1
 
       - name: 状态
         if: always()
+        run: echo "📊 ${{ matrix.project }} [${{ matrix.type }}] (${{ matrix.arch }}): ${{ steps.compile.outcome }}"
+
+  summary:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: 下载版本信息
+        uses: actions/download-artifact@v4
+        with:
+          pattern: version-*
+          path: /tmp/versions
+        continue-on-error: true
+
+      - name: 更新版本记录
         run: |
-          echo "📊 ${{ matrix.project }} [${{ matrix.type }}] (${{ matrix.arch }}): ${{ steps.compile.outcome }}"
+          chmod +x .github/workflows/scripts/*.sh
+          updated=0
+          
+          for file in /tmp/versions/version-*/update.txt; do
+            [ -f "$file" ] || continue
+            IFS='|' read -r name version < "$file"
+            [ -n "$name" ] && [ -n "$version" ] && {
+              .github/workflows/scripts/version-manager.sh write "$name" "$version"
+              echo "  ✅ $name → $version"
+              updated=$((updated + 1))
+            }
+          done
+          
+          echo "updated=$updated" >> $GITHUB_ENV
+
+      - name: 推送版本记录
+        if: env.updated != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add config/version.txt
+          git diff --cached --quiet || {
+            git commit -m "📝 更新版本记录"
+            for i in 1 2 3; do
+              git pull --rebase origin main || true
+              git push && break || sleep $((i * 3))
+            done
+          }
+
+      - name: 清理
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: version-*
+          failOnError: false
