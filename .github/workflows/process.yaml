@@ -171,11 +171,11 @@ jobs:
             pkg_arch=$(grep "^Architecture:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$ARCH")
             
             cat > apk-tmp/.PKGINFO << EOF
-pkgname = $pkg_name
-pkgver = $pkg_ver
-arch = $pkg_arch
-license = MIT
-EOF
+            pkgname = $pkg_name
+            pkgver = $pkg_ver
+            arch = $pkg_arch
+            license = MIT
+            EOF
             (cd apk-tmp && tar -czf "../$apk" .PKGINFO control.tar.gz data.tar.gz 2>/dev/null) || true
             rm -rf apk-tmp
           done
@@ -205,14 +205,18 @@ EOF
           export USERNAME="$(yq e '.defaults.username' "$CONFIG_FILE")"
           .github/workflows/scripts/release.sh
 
+      - name: 记录版本
+        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == 'true'
+        run: |
+          mkdir -p /tmp/version-info
+          echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
+
       - name: 上传版本信息
         if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: version-${{ matrix.project }}
-          path: |
-            echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/update.txt
-            /tmp/update.txt
+          path: /tmp/version-info/
           retention-days: 1
 
       - name: 状态
