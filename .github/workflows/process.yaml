@@ -171,11 +171,11 @@ jobs:
             pkg_arch=$(grep "^Architecture:" apk-tmp/control 2>/dev/null | cut -d' ' -f2 || echo "$ARCH")
             
             cat > apk-tmp/.PKGINFO << EOF
-            pkgname = $pkg_name
-            pkgver = $pkg_ver
-            arch = $pkg_arch
-            license = MIT
-            EOF
+pkgname = $pkg_name
+pkgver = $pkg_ver
+arch = $pkg_arch
+license = MIT
+EOF
             (cd apk-tmp && tar -czf "../$apk" .PKGINFO control.tar.gz data.tar.gz 2>/dev/null) || true
             rm -rf apk-tmp
           done
