@@ -221,8 +221,8 @@ jobs:
 
       - name: 状态
         if: always()
-        run: echo "📊 ${{ matrix.project }} [${{ matrix.type }}] (${{ matrix.arch }}): ${{ steps.compile.outcome }}"
-
+        run: 'echo "📊 ${{ matrix.project }} [${{ matrix.type }}] (${{ matrix.arch }}): ${{ steps.compile.outcome }}"'
+        
   summary:
     needs: build
     runs-on: ubuntu-latest
