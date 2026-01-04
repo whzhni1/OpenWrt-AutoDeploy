@@ -1,14 +1,23 @@
+
 defaults:
   username: whzhni
   platforms: gitcode gitee gitlab r2
   R2_PUBLIC_URL: https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev
   upx: true
+  sdks:
+  - openwrt-24.10    # 生成 IPK
+  - SNAPSHOT         # 生成 APK
   archs:
     - aarch64_cortex-a53
-#    - x86_64
-#    - aarch64_generic
-#    - arm_cortex-a7
-#    - mipsel_24kc
+    #- aarch64_generic
+    - x86_64
+   # - arm_cortex-a7_neon-vfpv4
+  upx_exclude:         # 这些架构不支持 UPX
+    - loongarch64_generic
+    - mips64_mips64r2
+    - mips64_octeonplus
+    - mips64el_mips64r2
+    - riscv64_riscv64
 
 projects:
   openlist:
