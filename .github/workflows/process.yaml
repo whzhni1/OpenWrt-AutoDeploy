@@ -149,15 +149,7 @@ jobs:
           ARCH="${{ matrix.arch }}"
           
           mkdir -p output
-          
-          if [ "$TYPE" = "luci" ]; then
-            find bin/packages -name "luci-app-${PROJ_NAME}*.ipk" -exec cp {} output/ \; 2>/dev/null || true
-            find bin/packages -name "luci-i18n-${PROJ_NAME}*.ipk" -exec cp {} output/ \; 2>/dev/null || true
-          else
-            find bin/packages -name "${PROJ_NAME}_*.ipk" -exec cp {} output/ \; 2>/dev/null || true
-            find bin/packages -name "${PROJ_NAME}-*.ipk" -exec cp {} output/ \; 2>/dev/null || true
-          fi
-          
+          find bin/packages -type f -name "*.ipk" -exec cp {} output/ \; || true
           for ipk in output/*.ipk; do
             [ -f "$ipk" ] || continue
             apk="${ipk%.ipk}.apk"
