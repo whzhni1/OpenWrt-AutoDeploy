@@ -139,6 +139,26 @@ jobs:
           NO_REFRESH_CHECK: true
           IGNORE_ERRORS: true
 
+      - name: 调试-查看目录结构
+        if: always()
+        run: |
+          echo "=== 当前目录 ==="
+          pwd
+          ls -la
+          
+          echo "=== bin/ 目录 ==="
+          ls -laR bin/ 2>/dev/null || echo "bin/ 不存在"
+          
+          echo "=== 查找所有 ipk/apk ==="
+          find . -name "*.ipk" 2>/dev/null || echo "无 ipk"
+          find . -name "*.apk" 2>/dev/null || echo "无 apk"
+          
+          echo "=== feeds/packages 目录 ==="
+          ls -laR feeds/packages/ 2>/dev/null | head -50 || echo "不存在"
+          
+          echo "=== 编译日志最后100行 ==="
+          cat build.log 2>/dev/null | tail -100 || echo "无日志"
+
       - name: 收集产物
         if: steps.compile.outcome == 'success'
         id: collect
