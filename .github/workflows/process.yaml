@@ -20,7 +20,8 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.gen.outputs.matrix }}
+      build_matrix: ${{ steps.gen.outputs.build_matrix }}
+      release_matrix: ${{ steps.gen.outputs.release_matrix }}
     steps:
       - uses: actions/checkout@v4
       
@@ -35,12 +36,15 @@ jobs:
           
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
           ARCHS=$(yq e '.defaults.archs | .[]' "$CONFIG_FILE")
-          FIRST_ARCH=$(echo "$ARCHS" | head -1)
+          SDKS=$(yq e '.defaults.sdks | .[]' "$CONFIG_FILE")
+          UPX_EXCLUDE=$(yq e '.defaults.upx_exclude | .[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' '|' | sed 's/|$//')
           
           [ -n "$INPUT_PROJECTS" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^($(echo "$INPUT_PROJECTS" | tr ',' '|'))$" || true)
           
-          MATRIX='{"include":['
-          first=true
+          BUILD_MATRIX='{"include":['
+          RELEASE_MATRIX='{"include":['
+          build_first=true
+          release_first=true
           
           for proj in $PROJECTS; do
             SOURCE_REPO=$(yq e ".projects.$proj.source_repo" "$CONFIG_FILE")
@@ -60,32 +64,43 @@ jobs:
             
             echo "✅ $proj: $CURRENT → $LATEST"
             
+            # 添加到发布矩阵
+            $release_first && release_first=false || RELEASE_MATRIX+=","
+            RELEASE_MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\"}"
+            
             # LuCI job
             if [ -n "$LUCI_REPO" ]; then
-              $first && first=false || MATRIX+=","
-              MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"all\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\"}"
+              $build_first && build_first=false || BUILD_MATRIX+=","
+              BUILD_MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"x86_64\",\"sdk\":\"SNAPSHOT\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":false}"
             fi
             
             # 架构包 jobs
             for arch in $ARCHS; do
-              $first && first=false || MATRIX+=","
-              save_ver=$([[ "$arch" == "$FIRST_ARCH" ]] && echo true || echo false)
-              MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":$UPX,\"save_version\":$save_ver}"
+              arch_upx=$UPX
+              [ -n "$UPX_EXCLUDE" ] && [[ "$arch" =~ ^($UPX_EXCLUDE)$ ]] && arch_upx=false
+              
+              for sdk in $SDKS; do
+                $build_first && build_first=false || BUILD_MATRIX+=","
+                BUILD_MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"sdk\":\"$sdk\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":$arch_upx}"
+              done
             done
           done
           
-          MATRIX+=']}'
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          BUILD_MATRIX+=']}'
+          RELEASE_MATRIX+=']}'
+          
+          echo "build_matrix=$BUILD_MATRIX" >> $GITHUB_OUTPUT
+          echo "release_matrix=$RELEASE_MATRIX" >> $GITHUB_OUTPUT
 
   build:
     needs: prepare
-    if: needs.prepare.outputs.matrix != '{"include":[]}'
+    if: needs.prepare.outputs.build_matrix != '{"include":[]}'
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
       fail-fast: false
       max-parallel: 10
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
     
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +113,7 @@ jobs:
           chmod +x .github/workflows/scripts/*.sh
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 ${{ matrix.project }} ${{ matrix.version }} [${{ matrix.type }}] (${{ matrix.arch }})"
+          echo "📦 ${{ matrix.project }} ${{ matrix.version }} [${{ matrix.type }}] (${{ matrix.arch }}-${{ matrix.sdk }})"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           mkdir -p feeds/packages output
@@ -133,35 +148,70 @@ jobs:
         continue-on-error: true
         uses: sbwml/openwrt-gh-action-sdk@go1.25
         env:
-          ARCH: ${{ matrix.arch == 'all' && 'x86_64' || matrix.arch }}-SNAPSHOT
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
           PACKAGES: ${{ steps.prep.outputs.packages }}
           NO_REFRESH_CHECK: true
           IGNORE_ERRORS: true
-
-      - name: 调试信息
-        if: failure()
-        run: |
-          echo "=== bin/ 目录 ===" && ls -laR bin/ 2>/dev/null || echo "不存在"
-          echo "=== 查找产物 ===" && find . -name "*.ipk" -o -name "*.apk" 2>/dev/null
-          echo "=== 编译日志 ===" && tail -100 build.log 2>/dev/null || true
 
       - name: 收集产物
         if: steps.compile.outcome == 'success'
         id: collect
         run: |
           mkdir -p output
-          find bin/packages -name "*.ipk" -exec cp {} output/ \; 2>/dev/null || true
-          find bin/packages -name "*.apk" -exec cp {} output/ \; 2>/dev/null || true
+          ARCH="${{ matrix.arch }}"
+          PROJ="${{ steps.prep.outputs.proj_name }}"
+          SDK="${{ matrix.sdk }}"
+          
+          if [ "$ARCH" = "riscv64_riscv64" ] && [ "$SDK" = "SNAPSHOT" ]; then
+            PKG_DIR="bin/packages/riscv64_generic/packages_ci"
+          else
+            PKG_DIR="bin/packages/$ARCH/packages_ci"
+          fi
+          
+          for pkg in "$PKG_DIR"/*.{ipk,apk}; do
+            [ -f "$pkg" ] || continue
+            filename=$(basename "$pkg")
+            
+            if [[ "$filename" == "$PROJ-"* ]] || [[ "$filename" == "luci-app-$PROJ-"* ]] || [[ "$filename" == "luci-i18n-$PROJ-"* ]]; then
+              newname=$(echo "$filename" | sed -E "s/-r[0-9]+\./-$ARCH./")
+              cp "$pkg" "output/$newname"
+            fi
+          done
           
           count=$(ls -1 output/ 2>/dev/null | wc -l)
           echo "count=$count" >> $GITHUB_OUTPUT
           echo "📦 产物: $count 个"
           ls -lh output/
 
-      - name: 发布
+      - name: 上传产物
         if: steps.collect.outputs.count != '0'
-        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project }}-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: output/
+          retention-days: 1
+
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.release_matrix != '{"include":[]}'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.release_matrix) }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ matrix.project }}-*
+          path: output/
+          merge-multiple: true
+
+      - name: 发布
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
@@ -171,7 +221,21 @@ jobs:
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
         run: |
-          export REPO_NAME="${{ steps.prep.outputs.proj_name }}"
+          chmod +x .github/workflows/scripts/*.sh
+          
+          count=$(ls -1 output/ 2>/dev/null | wc -l)
+          echo "📦 ${{ matrix.project }} ${{ matrix.version }} 共 $count 个产物"
+          ls -lh output/
+          
+          [ "$count" -eq 0 ] && echo "⚠️ 无产物，跳过发布" && exit 0
+          
+          # 获取实际项目名（处理 luci_repo 情况）
+          PROJ_NAME="${{ matrix.project }}"
+          if [ -n "${{ matrix.luci_repo }}" ]; then
+            PROJ_NAME=$(basename "$(find output -name "luci-app-*" | head -1 | sed 's/.*luci-app-\([^-]*\).*/\1/')" 2>/dev/null || echo "$PROJ_NAME")
+          fi
+          
+          export REPO_NAME="$PROJ_NAME"
           export TAG_NAME="${{ matrix.version }}"
           export DOWNLOAD_DIR="output"
           export PLATFORMS="$(yq e '.defaults.platforms | join(" ")' "$CONFIG_FILE")"
@@ -179,19 +243,19 @@ jobs:
           export USERNAME="$(yq e '.defaults.username' "$CONFIG_FILE")"
           .github/workflows/scripts/release.sh
 
-      - name: 上传版本信息
-        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == true
-        run: mkdir -p /tmp/version-info && echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
-      
+      - name: 记录版本
+        run: |
+          mkdir -p /tmp/version-info
+          echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
+
       - uses: actions/upload-artifact@v4
-        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == true
         with:
           name: version-${{ matrix.project }}
           path: /tmp/version-info/
           retention-days: 1
 
   summary:
-    needs: build
+    needs: release
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -231,5 +295,7 @@ jobs:
       - name: 清理
         uses: geekyeggo/delete-artifact@v5
         with:
-          name: version-*
+          name: |
+            version-*
+            *-*-*
           failOnError: false
