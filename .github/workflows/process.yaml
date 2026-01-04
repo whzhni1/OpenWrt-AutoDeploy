@@ -39,7 +39,7 @@ jobs:
           
           [ -n "$INPUT_PROJECTS" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^($(echo "$INPUT_PROJECTS" | tr ',' '|'))$" || true)
           
-          MATRIX="{\"include\":["
+          MATRIX='{"include":['
           first=true
           
           for proj in $PROJECTS; do
@@ -62,18 +62,19 @@ jobs:
             
             # LuCI job
             if [ -n "$LUCI_REPO" ]; then
-              [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
-              MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"all\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":\"false\"}"
+              $first && first=false || MATRIX+=","
+              MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"all\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\"}"
             fi
             
             # 架构包 jobs
             for arch in $ARCHS; do
-              [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
-              MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":\"$UPX\",\"save_version\":\"$([ "$arch" = "$FIRST_ARCH" ] && echo true || echo false)\"}"
+              $first && first=false || MATRIX+=","
+              save_ver=$([[ "$arch" == "$FIRST_ARCH" ]] && echo true || echo false)
+              MATRIX+="{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":$UPX,\"save_version\":$save_ver}"
             done
           done
           
-          MATRIX="$MATRIX]}"
+          MATRIX+=']}'
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   build:
@@ -89,16 +90,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 准备
+      - name: 准备源码
         id: prep
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x .github/workflows/scripts/*.sh
           
-          TYPE="${{ matrix.type }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 ${{ matrix.project }} ${{ matrix.version }} [$TYPE] (${{ matrix.arch }})"
+          echo "📦 ${{ matrix.project }} ${{ matrix.version }} [${{ matrix.type }}] (${{ matrix.arch }})"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           mkdir -p feeds/packages output
@@ -118,7 +118,7 @@ jobs:
           
           [ ! -d "feeds/packages/$PROJ_NAME" ] && mkdir -p "feeds/packages/$PROJ_NAME"
           
-          if [ "$TYPE" = "luci" ]; then
+          if [ "${{ matrix.type }}" = "luci" ]; then
             PACKAGES="luci-app-$PROJ_NAME"
           else
             PACKAGES="$PROJ_NAME"
@@ -139,33 +139,21 @@ jobs:
           NO_REFRESH_CHECK: true
           IGNORE_ERRORS: true
 
-      - name: 调试-查看目录结构
-        if: always()
+      - name: 调试信息
+        if: failure()
         run: |
-          echo "=== 当前目录 ==="
-          pwd
-          ls -la
-          
-          echo "=== bin/ 目录 ==="
-          ls -laR bin/ 2>/dev/null || echo "bin/ 不存在"
-          
-          echo "=== 查找所有 ipk/apk ==="
-          find . -name "*.ipk" 2>/dev/null || echo "无 ipk"
-          find . -name "*.apk" 2>/dev/null || echo "无 apk"
-          
-          echo "=== feeds/packages 目录 ==="
-          ls -laR feeds/packages/ 2>/dev/null | head -50 || echo "不存在"
-          
-          echo "=== 编译日志最后100行 ==="
-          cat build.log 2>/dev/null | tail -100 || echo "无日志"
+          echo "=== bin/ 目录 ===" && ls -laR bin/ 2>/dev/null || echo "不存在"
+          echo "=== 查找产物 ===" && find . -name "*.ipk" -o -name "*.apk" 2>/dev/null
+          echo "=== 编译日志 ===" && tail -100 build.log 2>/dev/null || true
 
       - name: 收集产物
         if: steps.compile.outcome == 'success'
         id: collect
         run: |
           mkdir -p output
-          cp bin/packages/*/packages_ci/*.ipk output/ 2>/dev/null || true
-          cp bin/packages/*/packages_ci/*.apk output/ 2>/dev/null || true
+          find bin/packages -name "*.ipk" -exec cp {} output/ \; 2>/dev/null || true
+          find bin/packages -name "*.apk" -exec cp {} output/ \; 2>/dev/null || true
+          
           count=$(ls -1 output/ 2>/dev/null | wc -l)
           echo "count=$count" >> $GITHUB_OUTPUT
           echo "📦 产物: $count 个"
@@ -191,24 +179,17 @@ jobs:
           export USERNAME="$(yq e '.defaults.username' "$CONFIG_FILE")"
           .github/workflows/scripts/release.sh
 
-      - name: 记录版本
-        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == 'true'
-        run: |
-          mkdir -p /tmp/version-info
-          echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
-
       - name: 上传版本信息
-        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == 'true'
-        uses: actions/upload-artifact@v4
+        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == true
+        run: mkdir -p /tmp/version-info && echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
+      
+      - uses: actions/upload-artifact@v4
+        if: steps.collect.outputs.count != '0' && matrix.type == 'bin' && matrix.save_version == true
         with:
           name: version-${{ matrix.project }}
           path: /tmp/version-info/
           retention-days: 1
 
-      - name: 状态
-        if: always()
-        run: 'echo "📊 ${{ matrix.project }} [${{ matrix.type }}] (${{ matrix.arch }}): ${{ steps.compile.outcome }}"'
-        
   summary:
     needs: build
     runs-on: ubuntu-latest
@@ -216,41 +197,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: 下载版本信息
-        uses: actions/download-artifact@v4
-        with:
-          pattern: version-*
-          path: /tmp/versions
-        continue-on-error: true
-
       - name: 更新版本记录
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x .github/workflows/scripts/*.sh
-          updated=0
           
+          gh run download ${{ github.run_id }} -p "version-*" -D /tmp/versions 2>/dev/null || true
+          
+          updated=0
           for file in /tmp/versions/version-*/update.txt; do
             [ -f "$file" ] || continue
             IFS='|' read -r name version < "$file"
             [ -n "$name" ] && [ -n "$version" ] && {
               .github/workflows/scripts/version-manager.sh write "$name" "$version"
-              echo "  ✅ $name → $version"
-              updated=$((updated + 1))
+              echo "✅ $name → $version"
+              ((updated++)) || true
             }
           done
           
-          echo "updated=$updated" >> $GITHUB_ENV
-
-      - name: 推送版本记录
-        if: env.updated != '0'
-        run: |
+          [ "$updated" -gt 0 ] || exit 0
+          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add config/version.txt
           git diff --cached --quiet || {
             git commit -m "📝 更新版本记录"
             for i in 1 2 3; do
-              git pull --rebase origin main || true
-              git push && break || sleep $((i * 3))
+              git pull --rebase origin main && git push && break || sleep $((i * 3))
             done
           }
 
