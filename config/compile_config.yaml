@@ -1,0 +1,24 @@
+defaults:
+  username: whzhni
+  platforms: gitcode gitee gitlab r2
+  R2_PUBLIC_URL: https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev
+  upx: true
+  archs:
+    - aarch64_cortex-a53
+#    - x86_64
+#    - aarch64_generic
+#    - arm_cortex-a7
+#    - mipsel_24kc
+
+projects:
+  openlist:
+    source_repo: OpenListTeam/openlist
+    luci_repo: sbwml/luci-app-openlist2
+    # upx: false  # 可单独禁用
+
+  vnt:
+    source_repo: vnt-dev/vnt
+    luci_repo: lmq8267/luci-app-vnt
+
+  vnts:
+    source_repo: vnt-dev/vnts
