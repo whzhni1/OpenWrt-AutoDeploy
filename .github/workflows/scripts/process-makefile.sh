@@ -16,8 +16,8 @@ detect_type() {
 # 检测 Makefile 类型
 detect_makefile() {
     [ ! -f "$1" ] && echo "none|不存在" && return
-    grep -qE 'releases/download|releases/.*\.(tar|zip|gz)' "$1" 2>/dev/null && echo "binary|下载二进制" && return
-    grep -qE 'PKG_SOURCE_PROTO:=git|GO_PKG:=|GoPackage|RustPackage' "$1" 2>/dev/null && echo "source|源码编译" && return
+    grep -qE 'PKG_SOURCE_PROTO:=git|GO_PKG:=|GoPackage|RustPackage|golang-package.mk|rust-package.mk' "$1" 2>/dev/null && echo "source|源码编译" && return
+    grep -qE 'releases/download|wget|PKG_SOURCE.*\.(tar|zip|gz)' "$1" 2>/dev/null && echo "binary|下载二进制" && return
     echo "binary|未知类型"
 }
 
