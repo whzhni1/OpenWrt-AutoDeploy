@@ -1,0 +1,212 @@
+name: 编译 OpenWrt 软件包
+
+on:
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: '指定项目（逗号分隔，留空全部）'
+        required: false
+      force:
+        description: '强制重新编译'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 2 * * *'
+
+env:
+  CONFIG_FILE: config/compile_config.yaml
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: 生成矩阵
+        id: matrix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_PROJECTS: ${{ inputs.projects }}
+          FORCE_BUILD: ${{ inputs.force }}
+        run: |
+          chmod +x .github/workflows/scripts/*.sh
+          
+          PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
+          ARCHS=$(yq e '.defaults.archs | .[]' "$CONFIG_FILE" | tr '\n' ' ')
+          
+          if [ -n "$INPUT_PROJECTS" ]; then
+            FILTER_PATTERN=$(echo "$INPUT_PROJECTS" | tr ',' '|')
+            PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTER_PATTERN)$" || true)
+          fi
+          
+          MATRIX="["
+          first=true
+          
+          for proj in $PROJECTS; do
+            SOURCE_REPO=$(yq e ".projects.$proj.source_repo" "$CONFIG_FILE")
+            
+            LATEST=$(gh api repos/$SOURCE_REPO/releases/latest --jq '.tag_name' 2>/dev/null || \
+                     gh api repos/$SOURCE_REPO/tags --jq '.[0].name' 2>/dev/null || echo "")
+            [ -z "$LATEST" ] && continue
+            
+            CURRENT=$(.github/workflows/scripts/version-manager.sh read "$proj" 2>/dev/null || echo "")
+            
+            if [ "$FORCE_BUILD" != "true" ] && [ "$LATEST" = "$CURRENT" ]; then
+              echo "⏭️ $proj 已最新 $CURRENT"
+              continue
+            fi
+            
+            echo "✅ $proj: $CURRENT → $LATEST"
+            
+            for arch in $ARCHS; do
+              [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
+              MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"arch\":\"$arch\"}"
+            done
+          done
+          
+          MATRIX="$MATRIX]"
+          echo "result=$MATRIX" >> $GITHUB_OUTPUT
+          echo "📋 矩阵: $(echo "$MATRIX" | head -c 500)"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 ${{ matrix.project }} (${{ matrix.arch }})
+        id: prepare
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x .github/workflows/scripts/*.sh
+          
+          proj="${{ matrix.project }}"
+          version="${{ matrix.version }}"
+          arch="${{ matrix.arch }}"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 $proj $version ($arch)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          SOURCE_REPO=$(yq e ".projects.$proj.source_repo" "$CONFIG_FILE")
+          LUCI_REPO=$(yq e ".projects.$proj.luci_repo // \"\"" "$CONFIG_FILE")
+          UPX=$(yq e ".projects.$proj.upx // .defaults.upx // true" "$CONFIG_FILE")
+          
+          mkdir -p feeds/packages output
+          
+          if [ -n "$LUCI_REPO" ]; then
+            echo "📥 克隆 LuCI: $LUCI_REPO"
+            git clone --depth 1 "https://github.com/$LUCI_REPO.git" feeds/packages/luci-repo
+            
+            LUCI_APP_DIR=$(find feeds/packages/luci-repo -maxdepth 1 -type d -name "luci-app-*" | head -1)
+            ARCH_PKG_DIR=""
+            PROJ_NAME=""
+            
+            if [ -n "$LUCI_APP_DIR" ]; then
+              PROJ_NAME=$(basename "$LUCI_APP_DIR" | sed 's/^luci-app-//')
+              [ -d "feeds/packages/luci-repo/$PROJ_NAME" ] && ARCH_PKG_DIR="feeds/packages/luci-repo/$PROJ_NAME"
+            fi
+            
+            [ -z "$PROJ_NAME" ] && PROJ_NAME="$proj"
+            
+            [ -n "$LUCI_APP_DIR" ] && mv "$LUCI_APP_DIR" feeds/packages/
+            [ -n "$ARCH_PKG_DIR" ] && [ -d "$ARCH_PKG_DIR" ] && mv "$ARCH_PKG_DIR" feeds/packages/
+            rm -rf feeds/packages/luci-repo
+          else
+            PROJ_NAME="$proj"
+            mkdir -p "feeds/packages/$PROJ_NAME"
+          fi
+          
+          echo "PROJ_NAME=$PROJ_NAME" >> $GITHUB_OUTPUT
+          echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_OUTPUT
+          echo "📌 项目名: $PROJ_NAME"
+          
+          .github/workflows/scripts/process-makefile.sh "$PROJ_NAME" "$version" "$SOURCE_REPO" "feeds/packages" "$UPX"
+
+      - name: 编译 ${{ matrix.project }} (${{ matrix.arch }})
+        if: steps.prepare.outcome == 'success'
+        id: compile
+        continue-on-error: true
+        uses: sbwml/openwrt-gh-action-sdk@go1.25
+        env:
+          ARCH: ${{ matrix.arch }}-SNAPSHOT
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-${{ steps.prepare.outputs.PROJ_NAME }} ${{ steps.prepare.outputs.PROJ_NAME }}
+          NO_REFRESH_CHECK: true
+          IGNORE_ERRORS: true
+
+      - name: 收集产物
+        if: steps.compile.outcome == 'success'
+        id: collect
+        run: |
+          mkdir -p output
+          find bin/packages -name "*.ipk" -exec cp {} output/ \; 2>/dev/null || true
+          find bin/packages -name "*.apk" -exec cp {} output/ \; 2>/dev/null || true
+          
+          count=$(ls output/*.ipk output/*.apk 2>/dev/null | wc -l)
+          echo "count=$count" >> $GITHUB_OUTPUT
+          
+          echo "📦 产物: $count 个"
+          ls -lh output/ 2>/dev/null || echo "无产物"
+
+      - name: 发布 ${{ matrix.project }} (${{ matrix.arch }})
+        if: steps.collect.outcome == 'success' && steps.collect.outputs.count != '0'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+        run: |
+          PROJ_NAME="${{ steps.prepare.outputs.PROJ_NAME }}"
+          
+          export REPO_NAME="$PROJ_NAME"
+          export TAG_NAME="${{ matrix.version }}"
+          export DOWNLOAD_DIR="output"
+          export PLATFORMS="$(yq e '.defaults.platforms | join(" ")' "$CONFIG_FILE")"
+          export R2_PUBLIC_URL="$(yq e '.defaults.R2_PUBLIC_URL' "$CONFIG_FILE")"
+          export USERNAME="$(yq e '.defaults.username' "$CONFIG_FILE")"
+          
+          .github/workflows/scripts/release.sh
+
+      - name: 保存版本
+        if: steps.collect.outcome == 'success' && steps.collect.outputs.count != '0'
+        continue-on-error: true
+        run: |
+          proj="${{ matrix.project }}"
+          .github/workflows/scripts/version-manager.sh write "$proj" "${{ matrix.version }}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          for i in 1 2 3; do
+            git pull --rebase || true
+            git add config/version.txt
+            git commit -m "📦 $proj (${{ matrix.arch }}) → ${{ matrix.version }}" || true
+            git push && break || sleep $((i * 5))
+          done
+
+      - name: 任务状态
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 ${{ matrix.project }} (${{ matrix.arch }}) 状态:"
+          echo "  准备: ${{ steps.prepare.outcome }}"
+          echo "  编译: ${{ steps.compile.outcome }}"
+          echo "  收集: ${{ steps.collect.outcome }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
