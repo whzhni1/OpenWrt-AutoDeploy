@@ -37,15 +37,21 @@ get_bin_name() {
     local makefile="$1"
     [ -f "$makefile" ] || return
     
+    local content=$(tr '\t' ' ' < "$makefile")
+    
     # 方式1: $(INSTALL_BIN) $(PKG_BUILD_DIR)/xxx
-    local name=$(grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_BUILD_DIR\)/\K[^[:space:]]+' "$makefile" | head -1)
+    local name=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_BUILD_DIR\)/\K[^[:space:]]+' | head -1)
     [ -n "$name" ] && { echo "$name"; return; }
     
-    # 方式2: $(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/xxx
-    name=$(grep -oP '\$\(INSTALL_BIN\)\s+\$\(GO_PKG_BUILD_BIN_DIR\)/\K[^[:space:]]+' "$makefile" | head -1)
+    # 方式2: $(INSTALL_BIN) $(PKG_INSTALL_DIR)/.../xxx $(1)/path/yyy - 取目标名
+    name=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_INSTALL_DIR\)/[^[:space:]]+\s+\$\(1\)/[^[:space:]]*/\K[^[:space:]]+' | head -1)
     [ -n "$name" ] && { echo "$name"; return; }
     
-    # 方式3: GoPackage - 使用 PKG_NAME 或 GO_PKG_BASENAME
+    # 方式3: $(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/xxx
+    name=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(GO_PKG_BUILD_BIN_DIR\)/\K[^[:space:]]+' | head -1)
+    [ -n "$name" ] && { echo "$name"; return; }
+    
+    # 方式4: GoPackage
     if grep -qE 'GoPackage|GoBinPackage' "$makefile"; then
         name=$(get_makefile_var "$makefile" "GO_PKG_BASENAME")
         [ -z "$name" ] && name=$(get_makefile_var "$makefile" "PKG_NAME")
@@ -57,12 +63,12 @@ get_bin_name() {
 get_bin_dst() {
     local makefile="$1"
     [ -f "$makefile" ] || return
-    
-    # 方式1: 直接 INSTALL_BIN 到路径
-    local dst=$(grep -oP '\$\(INSTALL_BIN\)\s+\$\((PKG_BUILD_DIR|GO_PKG_BUILD_BIN_DIR)\)/[^[:space:]]+\s+\$\(1\)\K/[^[:space:]]+' "$makefile" | head -1)
+    local content=$(tr '\t' ' ' < "$makefile")
+    local dst=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_INSTALL_DIR\)/[^[:space:]]+\s+\$\(1\)\K/[^[:space:]]+' | head -1)
     [ -n "$dst" ] && { echo "$dst"; return; }
-    
-    # 方式2: GoPackage 默认安装到 /usr/bin/
+    dst=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(GO_PKG_BUILD_BIN_DIR\)/[^[:space:]]+\s+\$\(1\)\K/[^[:space:]]+' | head -1)
+    [ -n "$dst" ] && { echo "$dst"; return; }
+    # GoPackage 默认
     if grep -qE 'GoPackage|GoBinPackage' "$makefile"; then
         local name=$(get_bin_name "$makefile")
         [ -n "$name" ] && echo "/usr/bin/$name"
@@ -115,42 +121,75 @@ EOF
 # 解析 Makefile install
 parse_install() {
     local makefile="$1" data="$2" pkg_dir="$3"
-    local content=$(sed ':a;N;$!ba;s/\\\n//g' "$makefile")
+    # 合并续行，Tab转空格
+    local content=$(sed ':a;N;$!ba;s/\\\n//g' "$makefile" | tr '\t' ' ')
     local in_block=false
     local found=false
     
     while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
         [[ "$line" =~ define[[:space:]]+Package/.*/install ]] && { in_block=true; continue; }
-        [[ "$line" =~ ^endef ]] && { in_block=false; continue; }
+        [[ "$line" =~ ^[[:space:]]*endef ]] && { in_block=false; continue; }
         [ "$in_block" = "false" ] && continue
         
-        # INSTALL_DIR
-        if [[ "$line" =~ \$\(INSTALL_DIR\)[[:space:]]+\$\(1\)(/[^[:space:]]+) ]]; then
-            mkdir -p "$data${BASH_REMATCH[1]}"
+        # 去除行首空白
+        line="${line#"${line%%[![:space:]]*}"}"
+        
+        # INSTALL_DIR - 支持多个目录
+        if [[ "$line" =~ \$\(INSTALL_DIR\) ]]; then
+            local tmp="$line"
+            while [[ "$tmp" =~ \$\(1\)(/[^[:space:]]+) ]]; do
+                mkdir -p "$data${BASH_REMATCH[1]}"
+                tmp="${tmp#*"${BASH_REMATCH[0]}"}"
+            done
         fi
         
-        # INSTALL_BIN（非编译目录的文件，如 files/xxx）
-        if [[ "$line" =~ \$\(INSTALL_BIN\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]+) ]]; then
+        # INSTALL_BIN（非编译目录的文件）
+        if [[ "$line" =~ \$\(INSTALL_BIN\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]*) ]]; then
             local src="${BASH_REMATCH[1]}" dst="${BASH_REMATCH[2]}"
-            if [[ ! "$src" =~ \$\(PKG_BUILD_DIR\) ]] && [[ ! "$src" =~ \$\(GO_PKG ]]; then
-                src="${src#\./}"; src="${src#./}"
+            # 排除编译目录
+            if [[ ! "$src" =~ \$\(PKG_BUILD_DIR\) ]] && [[ ! "$src" =~ \$\(GO_PKG ]] && [[ ! "$src" =~ \$\(PKG_INSTALL_DIR\) ]]; then
+                # 清理源路径前缀
+                src="${src#\$\(CURDIR\)/}"
+                src="${src#\./}"
+                # 目标以/结尾时追加文件名
+                [[ "$dst" == */ ]] && dst="${dst}$(basename "$src")"
+                
                 mkdir -p "$data$(dirname "$dst")"
-                [ -f "$pkg_dir/$src" ] && cp "$pkg_dir/$src" "$data$dst" && chmod 755 "$data$dst" && echo "    ✅ $src → $dst" && found=true
+                if [ -f "$pkg_dir/$src" ]; then
+                    cp "$pkg_dir/$src" "$data$dst"
+                    chmod 755 "$data$dst"
+                    echo "    ✅ $src → $dst"
+                    found=true
+                fi
             fi
         fi
         
         # INSTALL_CONF / INSTALL_DATA
-        if [[ "$line" =~ \$\(INSTALL_(CONF|DATA)\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]+) ]]; then
+        if [[ "$line" =~ \$\(INSTALL_(CONF|DATA)\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]*) ]]; then
             local src="${BASH_REMATCH[2]}" dst="${BASH_REMATCH[3]}"
-            src="${src#\./}"; src="${src#./}"
+            # 清理源路径前缀
+            src="${src#\$\(CURDIR\)/}"
+            src="${src#\./}"
+            # 目标以/结尾时追加文件名
+            [[ "$dst" == */ ]] && dst="${dst}$(basename "$src")"
+            
             mkdir -p "$data$(dirname "$dst")"
-            [ -f "$pkg_dir/$src" ] && cp "$pkg_dir/$src" "$data$dst" && chmod 644 "$data$dst" && echo "    ✅ $src → $dst" && found=true
+            if [ -f "$pkg_dir/$src" ]; then
+                cp "$pkg_dir/$src" "$data$dst"
+                chmod 644 "$data$dst"
+                echo "    ✅ $src → $dst"
+                found=true
+            fi
         fi
         
         # CP
-        if [[ "$line" =~ \$\(CP\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]+) ]]; then
+        if [[ "$line" =~ \$\(CP\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]*) ]]; then
             local src="${BASH_REMATCH[1]}" dst="${BASH_REMATCH[2]}"
-            src="${src#\./}"; src="${src#./}"
+            src="${src#\$\(CURDIR\)/}"
+            src="${src#\./}"
+            [[ "$dst" == */ ]] && dst="${dst}$(basename "$src")"
+            
             mkdir -p "$data$(dirname "$dst")"
             [ -e "$pkg_dir/$src" ] && cp -a "$pkg_dir/$src" "$data$dst" && echo "    ✅ $src → $dst" && found=true
         fi
@@ -163,30 +202,38 @@ parse_install() {
         fi
     done <<< "$content"
     
-    # 如果没解析到任何文件，尝试直接处理 files 目录
+    # Fallback: 扫描 files 目录
     if [ "$found" = "false" ] && [ -d "$pkg_dir/files" ]; then
-        echo "    ⚠️ Makefile 未直接定义文件，扫描 files/ 目录"
+        echo "    ⚠️ Makefile 解析失败，扫描 files/ 目录"
         for f in "$pkg_dir/files/"*; do
             [ -f "$f" ] || continue
             local name=$(basename "$f")
             case "$name" in
-                *.init|*init) 
+                *.init)
                     mkdir -p "$data/etc/init.d"
                     cp "$f" "$data/etc/init.d/${name%.init}"
-                    cp "$f" "$data/etc/init.d/${name%init}" 2>/dev/null || cp "$f" "$data/etc/init.d/$name"
-                    chmod 755 "$data/etc/init.d/"*
-                    echo "    ✅ $name → /etc/init.d/"
+                    chmod 755 "$data/etc/init.d/${name%.init}"
+                    echo "    ✅ $name → /etc/init.d/${name%.init}"
                     ;;
-                *.conf|*.config)
+                *.config)
+                    mkdir -p "$data/etc/config"
+                    cp "$f" "$data/etc/config/${name%.config}"
+                    echo "    ✅ $name → /etc/config/${name%.config}"
+                    ;;
+                *.conf)
                     mkdir -p "$data/etc/config"
                     cp "$f" "$data/etc/config/${name%.conf}"
-                    cp "$f" "$data/etc/config/${name%.config}" 2>/dev/null || true
-                    echo "    ✅ $name → /etc/config/"
+                    echo "    ✅ $name → /etc/config/${name%.conf}"
+                    ;;
+                *.db|*.json|*.yaml|*.yml)
+                    mkdir -p "$data/etc/$PROJ_NAME"
+                    cp "$f" "$data/etc/$PROJ_NAME/$name"
+                    echo "    ✅ $name → /etc/$PROJ_NAME/$name"
                     ;;
                 *)
                     mkdir -p "$data/etc"
-                    cp "$f" "$data/etc/"
-                    echo "    ✅ $name → /etc/"
+                    cp "$f" "$data/etc/$name"
+                    echo "    ✅ $name → /etc/$name"
                     ;;
             esac
         done
