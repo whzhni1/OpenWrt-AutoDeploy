@@ -1,18 +1,19 @@
-
 defaults:
   username: whzhni
-  platforms: gitcode gitee gitlab r2
+  platforms:
+    - gitcode
+    - gitee
+    - gitlab
+    - r2
   R2_PUBLIC_URL: https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev
   upx: true
   sdks:
-  - openwrt-24.10    # 生成 IPK
-  - SNAPSHOT         # 生成 APK
+    - openwrt-24.10
+    - SNAPSHOT
   archs:
     - aarch64_cortex-a53
-    #- aarch64_generic
     - x86_64
-   # - arm_cortex-a7_neon-vfpv4
-  upx_exclude:         # 这些架构不支持 UPX
+  upx_exclude:
     - loongarch64_generic
     - mips64_mips64r2
     - mips64_octeonplus
@@ -23,7 +24,6 @@ projects:
   openlist:
     source_repo: OpenListTeam/openlist
     luci_repo: sbwml/luci-app-openlist2
-    # upx: false  # 可单独禁用
 
   vnt:
     source_repo: vnt-dev/vnt
