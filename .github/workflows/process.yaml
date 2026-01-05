@@ -35,9 +35,9 @@ jobs:
           chmod +x .github/workflows/scripts/*.sh
           
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
-          ARCHS=$(yq e '.defaults.archs | .[]' "$CONFIG_FILE")
-          SDKS=$(yq e '.defaults.sdks | .[]' "$CONFIG_FILE")
-          UPX_EXCLUDE=$(yq e '.defaults.upx_exclude | .[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' '|' | sed 's/|$//')
+          ARCHS=$(yq e '.defaults.archs[]' "$CONFIG_FILE")
+          SDKS=$(yq e '.defaults.sdks[]' "$CONFIG_FILE")
+          UPX_EXCLUDE=$(yq e '.defaults.upx_exclude[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' '|' | sed 's/|$//')
           
           [ -n "$INPUT_PROJECTS" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^($(echo "$INPUT_PROJECTS" | tr ',' '|'))$" || true)
           
@@ -64,7 +64,7 @@ jobs:
             
             RELEASE_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\"}")
             
-            # LuCI 编译两种格式（x86_64 固定，遍历 SDK）
+            # LuCI（遍历 SDK，固定 x86_64）
             if [ -n "$LUCI_REPO" ]; then
               for sdk in $SDKS; do
                 BUILD_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"x86_64\",\"sdk\":\"$sdk\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":false}")
@@ -163,17 +163,24 @@ jobs:
           SDK="${{ matrix.sdk }}"
           TYPE="${{ matrix.type }}"
           
+          # 调试：查看实际产物
+          echo "=== 查找所有编译产物 ==="
+          find bin/packages -name "*.ipk" -o -name "*.apk" 2>/dev/null || echo "无产物"
+          
           PKG_DIR="bin/packages/$ARCH/packages_ci"
           [ "$ARCH" = "riscv64_riscv64" ] && [ "$SDK" = "SNAPSHOT" ] && PKG_DIR="bin/packages/riscv64_generic/packages_ci"
+          
+          echo "=== 目标目录: $PKG_DIR ==="
+          ls -la "$PKG_DIR"/ 2>/dev/null || echo "目录不存在"
           
           for pkg in "$PKG_DIR"/*.{ipk,apk}; do
             [ -f "$pkg" ] || continue
             filename=$(basename "$pkg")
             
-            if [[ "$filename" == "$PROJ-"* ]] || [[ "$filename" == "luci-app-$PROJ-"* ]] || [[ "$filename" == "luci-i18n-$PROJ-"* ]]; then
-              # LuCI 保持原名，架构包添加架构后缀
-              [ "$TYPE" = "luci" ] && newname="$filename" || newname=$(echo "$filename" | sed -E "s/-r[0-9]+\./-$ARCH./")
-              cp "$pkg" "output/$newname"
+            if [ "$TYPE" = "luci" ]; then
+              [[ "$filename" == luci-*-$PROJ-* ]] && cp "$pkg" "output/$filename"
+            else
+              [[ "$filename" == "$PROJ-"* ]] && cp "$pkg" "output/${filename%%-r[0-9]*.*}-$ARCH.${filename##*.}"
             fi
           done
           
@@ -181,7 +188,7 @@ jobs:
           echo "count=$count" >> $GITHUB_OUTPUT
           echo "📦 产物: $count 个"
           ls -lh output/
-
+          
       - name: 上传产物
         if: steps.collect.outputs.count != '0'
         uses: actions/upload-artifact@v4
@@ -233,9 +240,9 @@ jobs:
           export REPO_NAME="$PROJ_NAME"
           export TAG_NAME="${{ matrix.version }}"
           export DOWNLOAD_DIR="output"
-          export PLATFORMS="$(yq e '.defaults.platforms | join(" ")' "$CONFIG_FILE")"
-          export R2_PUBLIC_URL="$(yq e '.defaults.R2_PUBLIC_URL' "$CONFIG_FILE")"
-          export USERNAME="$(yq e '.defaults.username' "$CONFIG_FILE")"
+          export PLATFORMS=$(yq e '.defaults.platforms[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' ' ')
+          export R2_PUBLIC_URL=$(yq e '.defaults.R2_PUBLIC_URL // ""' "$CONFIG_FILE")
+          export USERNAME=$(yq e '.defaults.username // ""' "$CONFIG_FILE")
           .github/workflows/scripts/release.sh
 
       - name: 记录版本
