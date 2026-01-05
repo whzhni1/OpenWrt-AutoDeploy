@@ -1,5 +1,5 @@
 
-luci-app-openclash|v0.47.038
+luci-app-openclash|v0.47.046
 luci-app-passwall2|v26.1.1-1
 luci-app-passwall|v26.1.1-1
 luci-theme-aurora|v0.9.0_beta
