@@ -104,6 +104,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 编译缓存
+        if: matrix.type == 'bin'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.arch }}-${{ matrix.project }}-${{ matrix.version }}
+          restore-keys: |
+            ${{ matrix.arch }}-${{ matrix.project }}-
+            ${{ matrix.arch }}-
+
       - name: 准备源码
         id: prep
         env:
@@ -124,7 +138,7 @@ jobs:
             LUCI_APP=$(find luci-repo -maxdepth 1 -type d -name "luci-app-*" | head -1)
             if [ -n "$LUCI_APP" ]; then
               PROJ_NAME=$(basename "$LUCI_APP" | sed 's/^luci-app-//')
-              mv "$LUCI_APP" feeds/packages/
+              [ "${{ matrix.type }}" = "luci" ] && mv "$LUCI_APP" feeds/packages/
               [ -d "luci-repo/$PROJ_NAME" ] && mv "luci-repo/$PROJ_NAME" feeds/packages/
             fi
             rm -rf luci-repo
@@ -158,37 +172,25 @@ jobs:
         id: collect
         run: |
           mkdir -p output
-          ARCH="${{ matrix.arch }}"
           PROJ="${{ steps.prep.outputs.proj_name }}"
-          SDK="${{ matrix.sdk }}"
+          ARCH="${{ matrix.arch }}"
           TYPE="${{ matrix.type }}"
           
-          # 调试：查看实际产物
-          echo "=== 查找所有编译产物 ==="
-          find bin/packages -name "*.ipk" -o -name "*.apk" 2>/dev/null || echo "无产物"
-          
           PKG_DIR="bin/packages/$ARCH/packages_ci"
-          [ "$ARCH" = "riscv64_riscv64" ] && [ "$SDK" = "SNAPSHOT" ] && PKG_DIR="bin/packages/riscv64_generic/packages_ci"
+          [ "$ARCH" = "riscv64_riscv64" ] && [ "${{ matrix.sdk }}" = "SNAPSHOT" ] && PKG_DIR="bin/packages/riscv64_generic/packages_ci"
           
-          echo "=== 目标目录: $PKG_DIR ==="
-          ls -la "$PKG_DIR"/ 2>/dev/null || echo "目录不存在"
-          
-          for pkg in "$PKG_DIR"/*.{ipk,apk}; do
-            [ -f "$pkg" ] || continue
-            filename=$(basename "$pkg")
-            
-            if [ "$TYPE" = "luci" ]; then
-              [[ "$filename" == luci-*-$PROJ-* ]] && cp "$pkg" "output/$filename"
-            else
-              [[ "$filename" == "$PROJ-"* ]] && cp "$pkg" "output/${filename%%-r[0-9]*.*}-$ARCH.${filename##*.}"
-            fi
-          done
+          # 简化匹配：luci 包或主包
+          if [ "$TYPE" = "luci" ]; then
+            cp "$PKG_DIR"/luci-*${PROJ}* output/ 2>/dev/null || true
+          else
+            cp "$PKG_DIR"/${PROJ}[_-]* output/ 2>/dev/null || true
+          fi
           
           count=$(ls -1 output/ 2>/dev/null | wc -l)
           echo "count=$count" >> $GITHUB_OUTPUT
           echo "📦 产物: $count 个"
           ls -lh output/
-          
+
       - name: 上传产物
         if: steps.collect.outputs.count != '0'
         uses: actions/upload-artifact@v4
@@ -235,7 +237,7 @@ jobs:
           [ "$count" -eq 0 ] && echo "⚠️ 无产物，跳过发布" && exit 0
           
           PROJ_NAME="${{ matrix.project }}"
-          [ -n "${{ matrix.luci_repo }}" ] && LUCI_NAME=$(ls output/ | grep -oP 'luci-app-\K[^-]+' | head -1) && [ -n "$LUCI_NAME" ] && PROJ_NAME="$LUCI_NAME"
+          [ -n "${{ matrix.luci_repo }}" ] && LUCI_NAME=$(ls output/ | grep -oP 'luci-app-\K[^_-]+' | head -1) && [ -n "$LUCI_NAME" ] && PROJ_NAME="$LUCI_NAME"
           
           export REPO_NAME="$PROJ_NAME"
           export TAG_NAME="${{ matrix.version }}"
