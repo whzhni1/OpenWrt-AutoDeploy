@@ -179,12 +179,28 @@ jobs:
           PKG_DIR="bin/packages/$ARCH/packages_ci"
           [ "$ARCH" = "riscv64_riscv64" ] && [ "${{ matrix.sdk }}" = "SNAPSHOT" ] && PKG_DIR="bin/packages/riscv64_generic/packages_ci"
           
-          # 简化匹配：luci 包或主包
-          if [ "$TYPE" = "luci" ]; then
-            cp "$PKG_DIR"/luci-*${PROJ}* output/ 2>/dev/null || true
-          else
-            cp "$PKG_DIR"/${PROJ}[_-]* output/ 2>/dev/null || true
-          fi
+          for pkg in "$PKG_DIR"/*.{ipk,apk}; do
+            [ -f "$pkg" ] || continue
+            filename=$(basename "$pkg")
+            ext="${filename##*.}"
+            
+            if [ "$TYPE" = "luci" ]; then
+              # LuCI 包：匹配 luci-*openlist2*
+              [[ "$filename" == luci-*${PROJ}* ]] || continue
+              newname=$(echo "$filename" | sed -E 's/-([0-9])/_\1/; s/-r([0-9]+)\./_r\1_all./')
+            else
+              [[ "$filename" == ${PROJ}[_-]* ]] || continue
+              # 统一格式：xxx_version_arch.ipk/apk
+              if [[ "$filename" == *_${ARCH}.* ]] || [[ "$filename" == *_${ARCH}_* ]]; then
+                newname="$filename"
+              else
+                newname=$(echo "$filename" | sed -E "s/-r([0-9]+)\./_r\1_${ARCH}./; s/^${PROJ}-/${PROJ}_/")
+              fi
+            fi
+            
+            cp "$pkg" "output/$newname"
+            [ "$filename" != "$newname" ] && echo "  📄 $filename → $newname"
+          done
           
           count=$(ls -1 output/ 2>/dev/null | wc -l)
           echo "count=$count" >> $GITHUB_OUTPUT
