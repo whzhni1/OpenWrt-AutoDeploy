@@ -111,10 +111,16 @@ jobs:
           go-version: 'stable'
           cache: false
 
+
       - name: 安装 Rust
         if: matrix.type == 'rust'
         run: |
-          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf i686-unknown-linux-musl
+          rustup target add \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            armv7-unknown-linux-musleabihf \
+            arm-unknown-linux-musleabihf \
+            i686-unknown-linux-musl
 
       - name: 处理 ${{ matrix.project }}
         env:
@@ -151,22 +157,49 @@ jobs:
             git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
             cd source
             
-            name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | xargs basename)
+            # 提取名称：去掉版本后缀如 /v4
+            name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | sed 's|/v[0-9]*$||' | xargs basename)
             [ -z "$name" ] && name="$proj"
+            
             main=$(find . -name "main.go" -path "*/cmd/*" -exec dirname {} \; 2>/dev/null | head -1)
             [ -z "$main" ] && main="."
             
-            for pair in "amd64: x86_64" "arm64: aarch64" "arm:7 armv7" "arm:5 armv5" "386: i686"; do
-              goarch="${pair%% *}"
-              arch="${pair##* }"
-              IFS=: read -r GOARCH GOARM <<< "$goarch"
-              
+            echo "📌 模块: $name, 入口: $main"
+            
+            # Go 全部 musl 架构
+            declare -A GO_ARCHS=(
+              [amd64]=x86_64
+              [arm64]=aarch64
+              [arm:7]=armv7
+              [arm:6]=armv6
+              [arm:5]=armv5
+              [386]=i386
+              [mips:softfloat]=mips
+              [mipsle:softfloat]=mipsel
+              [mips64]=mips64
+              [mips64le]=mips64el
+            )
+            
+            for goarch in "${!GO_ARCHS[@]}"; do
+              arch="${GO_ARCHS[$goarch]}"
               pkg_name="${name}-linux-musl-${arch}"
               echo "🔨 Go: $pkg_name"
               mkdir -p "../bins/$pkg_name"
               
-              GOOS=linux GOARCH=$GOARCH ${GOARM:+GOARM=$GOARM} CGO_ENABLED=0 \
-                go build -trimpath -ldflags="-s -w" -o "../bins/$pkg_name/$name" "./$main"
+              # 解析 GOARCH:GOARM:GOMIPS
+              IFS=: read -r GOARCH GOARM_OR_MIPS <<< "$goarch"
+              
+              export GOOS=linux
+              export GOARCH
+              export CGO_ENABLED=0
+              unset GOARM GOMIPS
+              
+              case "$GOARCH" in
+                arm) export GOARM="$GOARM_OR_MIPS" ;;
+                mips|mipsle) export GOMIPS="$GOARM_OR_MIPS" ;;
+              esac
+              
+              go build -trimpath -ldflags="-s -w" -o "../bins/$pkg_name/$name" "./$main"
             done
             cd ..
             
@@ -175,15 +208,24 @@ jobs:
             git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
             cd source
             
-            name=$(grep '^name' Cargo.toml | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
+            name=$(grep -E '^name\s*=' Cargo.toml | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
             [ -z "$name" ] && name="$proj"
             
-            for pair in "x86_64-unknown-linux-musl x86_64" "aarch64-unknown-linux-musl aarch64" "armv7-unknown-linux-musleabihf armv7" "i686-unknown-linux-musl i686"; do
-              target="${pair%% *}"
-              arch="${pair##* }"
-              
+            echo "📌 模块: $name"
+            
+            # Rust musl 架构
+            declare -A RUST_ARCHS=(
+              [x86_64-unknown-linux-musl]=x86_64
+              [aarch64-unknown-linux-musl]=aarch64
+              [armv7-unknown-linux-musleabihf]=armv7
+              [arm-unknown-linux-musleabihf]=armv6
+              [i686-unknown-linux-musl]=i386
+            )
+            
+            for target in "${!RUST_ARCHS[@]}"; do
+              arch="${RUST_ARCHS[$target]}"
               pkg_name="${name}-linux-musl-${arch}"
-              echo "🔨 Rust: $pkg_name"
+              echo "🔨 Rust: $pkg_name ($target)"
               mkdir -p "../bins/$pkg_name"
               
               cargo build --release --target "$target"
@@ -267,7 +309,7 @@ jobs:
           .github/workflows/scripts/release.sh
           
           echo "✅ $proj 完成"
-
+          
       - name: 保存版本
         if: success()
         run: |
