@@ -49,7 +49,7 @@ jobs:
           
           for proj in $PROJECTS; do
             REPO=$(yq e ".projects.$proj.repo" "$CONFIG_FILE")
-            CFG_TYPE=$(yq e ".projects.$proj.type // \"\"" "$CONFIG_FILE")
+            FILTER=$(yq e ".projects.$proj.filter // \"\"" "$CONFIG_FILE")
             
             LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && continue
@@ -61,10 +61,8 @@ jobs:
               continue
             fi
             
-            # 检测类型
-            if [ -n "$CFG_TYPE" ]; then
-              TYPE="$CFG_TYPE"
-            elif gh api "repos/$REPO/releases/tags/$LATEST" --jq '.assets[].name' 2>/dev/null | grep -qiE 'linux.*(amd64|x86_64|arm|aarch)'; then
+            # 检测类型：有 filter 就下载，否则检测语言
+            if [ -n "$FILTER" ]; then
               TYPE="bin"
             elif gh api "repos/$REPO/contents" --jq '.[].name' 2>/dev/null | grep -q 'go.mod'; then
               TYPE="go"
@@ -220,7 +218,6 @@ jobs:
                 *.gz) gunzip -c "$f" > "$tmp/$(basename "${f%.gz}")" ;;
                 *) cp "$f" "$tmp/" ;;
               esac
-              # 用原始文件名（去后缀）作为目录名
               pkg_name=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
               mkdir -p "bins/$pkg_name"
               find "$tmp" -type f -executable -exec cp {} "bins/$pkg_name/" \;
@@ -243,6 +240,13 @@ jobs:
               find "$LUCI_DIR" -type f \( -name "*.lua" -o -name "*.js" -o -name "*.htm" -o -name "*.sh" -o -name "*init*" -o -name "*.conf" -o -name "*.json" \) \
                 -exec sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" {} \; 2>/dev/null || true
             fi
+            
+            # === 从 Makefile 提取依赖 ===
+            for mf in "$LUCI_DIR"/*/Makefile; do
+              [ -f "$mf" ] || continue
+              deps=$(grep -E '^\s*DEPENDS\s*:?=' "$mf" | grep -oE '\+[a-zA-Z0-9_-]+' | sed 's/^+//' | sort -u | tr '\n' ' ')
+              [ -n "$deps" ] && export PKG_DEPS="$deps" && echo "📦 依赖: $deps" && break
+            done
           fi
           
           # === 前端（仅 openlist） ===
@@ -255,7 +259,6 @@ jobs:
           fi
           
           # === 打包 ===
-          export PKG_DEPS="$(cfg_arr deps)"
           export PKG_UPX="$(cfg_def upx true)"
           export LUCI_DEPS="$(cfg_arr luci_deps)"
           
