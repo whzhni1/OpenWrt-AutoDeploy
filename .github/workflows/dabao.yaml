@@ -10,6 +10,10 @@ on:
         description: '强制重新打包'
         type: boolean
         default: false
+      fix_path:
+        description: '修改默认路径至config'
+        type: boolean
+        default: true
   schedule:
     - cron: '0 2 * * *'
 
@@ -45,23 +49,35 @@ jobs:
           
           for proj in $PROJECTS; do
             REPO=$(yq e ".projects.$proj.repo" "$CONFIG_FILE")
+            CFG_TYPE=$(yq e ".projects.$proj.type // \"\"" "$CONFIG_FILE")
             
             LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && continue
             
             CURRENT=$(.github/workflows/scripts/version-manager.sh read "$proj" 2>/dev/null || echo "")
-            LATEST_CLEAN="${LATEST#v}"
-            CURRENT_CLEAN="${CURRENT#v}"
             
-            if [ "$FORCE_BUILD" != "true" ] && [ "$LATEST_CLEAN" = "$CURRENT_CLEAN" ]; then
+            if [ "$FORCE_BUILD" != "true" ] && [ "${LATEST#v}" = "${CURRENT#v}" ]; then
               echo "⏭️ $proj 已最新 $CURRENT"
               continue
             fi
             
-            echo "✅ $proj: $CURRENT → $LATEST"
+            # 检测类型
+            if [ -n "$CFG_TYPE" ]; then
+              TYPE="$CFG_TYPE"
+            elif gh api "repos/$REPO/releases/tags/$LATEST" --jq '.assets[].name' 2>/dev/null | grep -qiE 'linux.*(amd64|x86_64|arm|aarch)'; then
+              TYPE="bin"
+            elif gh api "repos/$REPO/contents" --jq '.[].name' 2>/dev/null | grep -q 'go.mod'; then
+              TYPE="go"
+            elif gh api "repos/$REPO/contents" --jq '.[].name' 2>/dev/null | grep -q 'Cargo.toml'; then
+              TYPE="rust"
+            else
+              TYPE="bin"
+            fi
+            
+            echo "✅ $proj: $CURRENT → $LATEST ($TYPE)"
             
             [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
-            MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\"}"
+            MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"$TYPE\"}"
           done
           
           MATRIX="$MATRIX]"
@@ -84,11 +100,23 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y upx-ucl
+          sudo apt-get install -y upx-ucl musl-tools
           git clone --depth 1 https://github.com/openwrt/luci.git /tmp/luci
           make -C /tmp/luci/modules/luci-base/src po2lmo
           sudo cp /tmp/luci/modules/luci-base/src/po2lmo /usr/local/bin/
           chmod +x .github/workflows/scripts/*.sh
+
+      - name: 安装 Go
+        if: matrix.type == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: 安装 Rust
+        if: matrix.type == 'rust'
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf i686-unknown-linux-musl
 
       - name: 处理 ${{ matrix.project }}
         env:
@@ -99,12 +127,14 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          FIX_PATH: ${{ inputs.fix_path }}
         run: |
           proj="${{ matrix.project }}"
           LATEST="${{ matrix.version }}"
+          TYPE="${{ matrix.type }}"
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 $proj → $LATEST"
+          echo "📦 $proj $LATEST [$TYPE]"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           cfg() { yq e ".projects.$proj.$1 // \"\"" "$CONFIG_FILE"; }
@@ -114,72 +144,125 @@ jobs:
           
           REPO=$(cfg repo)
           LUCI_REPO=$(cfg luci_repo)
-          FILTER=$(cfg filter)
           
           mkdir -p downloads bins output
           
-          echo "📥 下载 (filter: $FILTER)"
-          while read url; do
-            name=$(basename "$url")
+          # === 获取/编译二进制 ===
+          if [ "$TYPE" = "go" ]; then
+            echo "📥 Clone $REPO@$LATEST"
+            git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
+            cd source
             
-            matched=false
-            case "$name" in
-              $FILTER) matched=true ;;
-            esac
-            [ "$matched" = "false" ] && continue
+            name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | xargs basename)
+            [ -z "$name" ] && name="$proj"
+            main=$(find . -name "main.go" -path "*/cmd/*" -exec dirname {} \; 2>/dev/null | head -1)
+            [ -z "$main" ] && main="."
             
-            skip=false
-            for ex in $(cfg_arr exclude); do
-              case "$name" in
-                $ex) skip=true; break ;;
-              esac
+            for pair in "amd64: x86_64" "arm64: aarch64" "arm:7 armv7" "arm:5 armv5" "386: i686"; do
+              goarch="${pair%% *}"
+              arch="${pair##* }"
+              IFS=: read -r GOARCH GOARM <<< "$goarch"
+              
+              pkg_name="${name}-linux-musl-${arch}"
+              echo "🔨 Go: $pkg_name"
+              mkdir -p "../bins/$pkg_name"
+              
+              GOOS=linux GOARCH=$GOARCH ${GOARM:+GOARM=$GOARM} CGO_ENABLED=0 \
+                go build -trimpath -ldflags="-s -w" -o "../bins/$pkg_name/$name" "./$main"
             done
-            [ "$skip" = "true" ] && continue
+            cd ..
             
-            echo "  ⬇️ $name"
-            curl -sL "$url" -o "downloads/$name"
-          done < <(gh api repos/$REPO/releases/latest --jq '.assets[].browser_download_url')
-          
-          echo "📂 下载: $(ls downloads | wc -l) 个"
-          
-          echo "📦 解压"
-          for f in downloads/*; do
-            [ -f "$f" ] || continue
-            tmp=$(mktemp -d)
+          elif [ "$TYPE" = "rust" ]; then
+            echo "📥 Clone $REPO@$LATEST"
+            git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
+            cd source
             
-            case "$f" in
-              *.tar.gz|*.tgz) tar -xzf "$f" -C "$tmp" ;;
-              *.tar.xz) tar -xJf "$f" -C "$tmp" ;;
-              *.zip) unzip -q "$f" -d "$tmp" ;;
-              *.gz) gunzip -c "$f" > "$tmp/$(basename "${f%.gz}")" ;;
-              *) cp "$f" "$tmp/" ;;
-            esac
+            name=$(grep '^name' Cargo.toml | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
+            [ -z "$name" ] && name="$proj"
             
-            arch_name=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
-            mkdir -p "bins/$arch_name"
-            find "$tmp" -type f -executable -exec cp {} "bins/$arch_name/" \;
-            rm -rf "$tmp"
-            echo "  ✅ $arch_name"
-          done
+            for pair in "x86_64-unknown-linux-musl x86_64" "aarch64-unknown-linux-musl aarch64" "armv7-unknown-linux-musleabihf armv7" "i686-unknown-linux-musl i686"; do
+              target="${pair%% *}"
+              arch="${pair##* }"
+              
+              pkg_name="${name}-linux-musl-${arch}"
+              echo "🔨 Rust: $pkg_name"
+              mkdir -p "../bins/$pkg_name"
+              
+              cargo build --release --target "$target"
+              find "target/$target/release" -maxdepth 1 -type f -executable ! -name "*.so" -exec cp {} "../bins/$pkg_name/" \;
+            done
+            cd ..
+            
+          else
+            # 下载二进制
+            FILTER=$(cfg filter)
+            echo "📥 下载二进制"
+            
+            gh api repos/$REPO/releases/tags/$LATEST --jq '.assets[].browser_download_url' 2>/dev/null | while read url; do
+              name=$(basename "$url")
+              [ -n "$FILTER" ] && { case "$name" in $FILTER) ;; *) continue ;; esac; }
+              
+              skip=false
+              for ex in $(cfg_arr exclude); do case "$name" in $ex) skip=true; break ;; esac; done
+              [ "$skip" = "true" ] && continue
+              
+              echo "  ⬇️ $name"
+              curl -sL "$url" -o "downloads/$name"
+            done
+            
+            for f in downloads/*; do
+              [ -f "$f" ] || continue
+              tmp=$(mktemp -d)
+              case "$f" in
+                *.tar.gz|*.tgz) tar -xzf "$f" -C "$tmp" ;;
+                *.tar.xz) tar -xJf "$f" -C "$tmp" ;;
+                *.zip) unzip -q "$f" -d "$tmp" ;;
+                *.gz) gunzip -c "$f" > "$tmp/$(basename "${f%.gz}")" ;;
+                *) cp "$f" "$tmp/" ;;
+              esac
+              # 用原始文件名（去后缀）作为目录名
+              pkg_name=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
+              mkdir -p "bins/$pkg_name"
+              find "$tmp" -type f -executable -exec cp {} "bins/$pkg_name/" \;
+              rm -rf "$tmp"
+            done
+          fi
           
-          echo "📂 架构目录: $(ls bins | wc -l) 个"
+          echo "📂 包: $(ls bins 2>/dev/null | wc -l) 个"
+          ls bins/
           
+          # === LuCI ===
           LUCI_DIR=""
           if [ -n "$LUCI_REPO" ]; then
             echo "📥 LuCI: $LUCI_REPO"
             git clone --depth 1 "https://github.com/$LUCI_REPO.git" luci-src
             LUCI_DIR="luci-src"
+            
+            if [ "${FIX_PATH:-true}" = "true" ]; then
+              echo "🔧 修改路径"
+              find "$LUCI_DIR" -type f \( -name "*.lua" -o -name "*.js" -o -name "*.htm" -o -name "*.sh" -o -name "*init*" -o -name "*.conf" -o -name "*.json" \) \
+                -exec sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" {} \; 2>/dev/null || true
+            fi
           fi
           
+          # === 前端（仅 openlist） ===
+          if [ "$proj" = "openlist2" ]; then
+            VER="${LATEST#v}"
+            FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
+            echo "📥 前端: $FRONTEND_URL"
+            curl -sL "$FRONTEND_URL" -o frontend.tar.gz
+            mkdir -p public/dist && tar xzf frontend.tar.gz -C public/dist --strip-components=1
+          fi
+          
+          # === 打包 ===
           export PKG_DEPS="$(cfg_arr deps)"
           export PKG_UPX="$(cfg_def upx true)"
           export LUCI_DEPS="$(cfg_arr luci_deps)"
           
           .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
           
-          # 从 dabao.sh 获取实际项目名
+          # === 发布 ===
           PROJ_NAME=$(cat output/.proj_name 2>/dev/null || echo "$proj")
-          
           export REPO_NAME="$PROJ_NAME"
           export TAG_NAME="$LATEST"
           export DOWNLOAD_DIR="output"
