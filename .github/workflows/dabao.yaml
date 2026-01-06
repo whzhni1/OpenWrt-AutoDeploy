@@ -169,15 +169,16 @@ jobs:
             # 模块名
             name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | sed 's|/v[0-9]*$||' | xargs basename)
             [ -z "$name" ] && name="$proj"
-            
-            # 自动检测入口（忽略大小写）
             main=""
-            if [ -d "./cmd" ]; then
-              main=$(find ./cmd -maxdepth 1 -type d -iname "$name" | head -1)
-              [ -z "$main" ] && main=$(find ./cmd -maxdepth 2 -name "main.go" -exec dirname {} \; 2>/dev/null | head -1)
+            if [ -d "./cmd/$name" ]; then
+              main="./cmd/$name"
+            elif [ -f "./cmd/main.go" ]; then
+              main="./cmd"
+            elif [ -d "./cmd" ] && grep -q 'package main' ./cmd/*.go 2>/dev/null; then
+              main="./cmd"
+            else
+              main="."
             fi
-            [ -z "$main" ] && main="."
-            
             echo "📌 模块: $name, 入口: $main"
             
             declare -A GO_ARCHS=(
