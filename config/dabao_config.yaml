@@ -8,9 +8,6 @@ projects:
   openlist:
     repo: OpenListTeam/openlist
     luci_repo: sbwml/luci-app-openlist2
-   # filter: "openlist-linux-*"
-    filter: "openlist-linux-musl-*-lite.tar.gz"
-    # exclude: ["*.sha256", "*.md5", "*lite.tar.gz"]
     platforms: r2 gitlab
 
   vnt:
@@ -18,10 +15,8 @@ projects:
     luci_repo: lmq8267/luci-app-vnt
     filter: "vnt-*-linux-*"
     exclude: ["*-android-*"]
-    deps: [ca-bundle, kmod-tun]
    # upx: off
 
   vnts:
     repo: vnt-dev/vnts
     filter: "vnts-*-linux-*"
-    deps: [ca-bundle]
