@@ -32,57 +32,24 @@ get_makefile_var() {
     grep -E "^${var}\s*:?=" "$file" 2>/dev/null | head -1 | sed 's/.*:*=\s*//' | tr -d ' '
 }
 
-# 从 Makefile 提取二进制名（支持多种格式）
-get_bin_name() {
+# 从 Makefile 提取二进制安装路径和名字
+get_bin_info() {
     local makefile="$1"
     [ -f "$makefile" ] || return
     
     local content=$(tr '\t' ' ' < "$makefile")
     
-    # 方式1: $(INSTALL_BIN) $(PKG_BUILD_DIR)/xxx
-    local name=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_BUILD_DIR\)/\K[^[:space:]]+' | head -1)
-    [ -n "$name" ] && { echo "$name"; return; }
+    # 匹配 INSTALL_BIN 行中的 PKG_INSTALL_DIR/GO_PKG_BUILD_BIN_DIR/PKG_BUILD_DIR
+    local line=$(echo "$content" | grep -E 'INSTALL_BIN.*\$\((PKG_INSTALL_DIR|GO_PKG_BUILD_BIN_DIR|PKG_BUILD_DIR)\)' | head -1)
+    [ -z "$line" ] && return
     
-    # 方式2: $(INSTALL_BIN) $(PKG_INSTALL_DIR)/.../xxx $(1)/path/yyy - 取目标名
-    name=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_INSTALL_DIR\)/[^[:space:]]+\s+\$\(1\)/[^[:space:]]*/\K[^[:space:]]+' | head -1)
-    [ -n "$name" ] && { echo "$name"; return; }
-    
-    # 方式3: $(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/xxx
-    name=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(GO_PKG_BUILD_BIN_DIR\)/\K[^[:space:]]+' | head -1)
-    [ -n "$name" ] && { echo "$name"; return; }
-    
-    # 方式4: GoPackage
-    if grep -qE 'GoPackage|GoBinPackage' "$makefile"; then
-        name=$(get_makefile_var "$makefile" "GO_PKG_BASENAME")
-        [ -z "$name" ] && name=$(get_makefile_var "$makefile" "PKG_NAME")
-        [ -n "$name" ] && { echo "$name"; return; }
-    fi
-}
-
-# 从 Makefile 提取二进制安装路径
-get_bin_dst() {
-    local makefile="$1"
-    [ -f "$makefile" ] || return
-    local content=$(tr '\t' ' ' < "$makefile")
-    local dst=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(PKG_INSTALL_DIR\)/[^[:space:]]+\s+\$\(1\)\K/[^[:space:]]+' | head -1)
-    [ -n "$dst" ] && { echo "$dst"; return; }
-    dst=$(echo "$content" | grep -oP '\$\(INSTALL_BIN\)\s+\$\(GO_PKG_BUILD_BIN_DIR\)/[^[:space:]]+\s+\$\(1\)\K/[^[:space:]]+' | head -1)
-    [ -n "$dst" ] && { echo "$dst"; return; }
-    # GoPackage 默认
-    if grep -qE 'GoPackage|GoBinPackage' "$makefile"; then
-        local name=$(get_bin_name "$makefile")
-        [ -n "$name" ] && echo "/usr/bin/$name"
-    fi
+    # 提取目标路径 $(1)/xxx
+    local dst=$(echo "$line" | grep -oP '\$\(1\)\K/[^[:space:]]+' | head -1)
+    echo "$dst"
 }
 
 get_luci_version() {
-    [ -f "$LUCI_APP_DIR/Makefile" ] && grep -E "^PKG_VERSION\s*:?=" "$LUCI_APP_DIR/Makefile" | head -1 | sed 's/.*:*=\s*//' | tr -d ' '
-}
-
-fix_data_path() {
-    [ -z "$PROJ_NAME" ] || [ -z "$LUCI_SRC" ] && return
-    find "$LUCI_SRC" -type f \( -name "*.sh" -o -name "*init*" -o -name "*.conf" -o -name "*.config" -o -name "Makefile" -o -name "*.lua" -o -name "*.js" -o -name "*.htm" -o -name "*.json" \) 2>/dev/null | \
-        xargs -r sed -i "s|/etc/$PROJ_NAME|/etc/config/${PROJ_NAME}_data|g" 2>/dev/null || true
+    [ -f "$LUCI_APP_DIR/Makefile" ] && get_makefile_var "$LUCI_APP_DIR/Makefile" "PKG_VERSION"
 }
 
 do_upx() { [ "$PKG_UPX" = "true" ] && upx --best --lzma "$1" 2>/dev/null || true; }
@@ -118,126 +85,87 @@ Description: $desc
 EOF
 }
 
-# 解析 Makefile install
+# ========== 简化的 parse_install ==========
+# 安装命令 → 权限映射
+declare -A INSTALL_PERMS=(
+    [INSTALL_BIN]=755
+    [INSTALL_SBIN]=755
+    [INSTALL_CONF]=644
+    [INSTALL_DATA]=644
+    [CP]=644
+)
+
 parse_install() {
     local makefile="$1" data="$2" pkg_dir="$3"
-    # 合并续行，Tab转空格
-    local content=$(sed ':a;N;$!ba;s/\\\n//g' "$makefile" | tr '\t' ' ')
-    local in_block=false
-    local found=false
+    local files_dir="$pkg_dir/files"
     
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        [[ "$line" =~ define[[:space:]]+Package/.*/install ]] && { in_block=true; continue; }
-        [[ "$line" =~ ^[[:space:]]*endef ]] && { in_block=false; continue; }
-        [ "$in_block" = "false" ] && continue
+    [ -d "$files_dir" ] || return 0
+    
+    # 读取 Makefile 内容，Tab 转空格，合并续行
+    local mf_content=""
+    [ -f "$makefile" ] && mf_content=$(sed ':a;N;$!ba;s/\\\n//g' "$makefile" | tr '\t' ' ')
+    
+    echo "  📂 处理 files/:"
+    
+    for f in "$files_dir"/*; do
+        [ -f "$f" ] || continue
+        local name=$(basename "$f")
         
-        # 去除行首空白
-        line="${line#"${line%%[![:space:]]*}"}"
+        # 在 Makefile 中查找包含该文件名的行
+        local line=$(echo "$mf_content" | grep -E "[^a-zA-Z0-9_]${name}[^a-zA-Z0-9_].*\\\$\(1\)" | head -1)
         
-        # INSTALL_DIR - 支持多个目录
-        if [[ "$line" =~ \$\(INSTALL_DIR\) ]]; then
-            local tmp="$line"
-            while [[ "$tmp" =~ \$\(1\)(/[^[:space:]]+) ]]; do
-                mkdir -p "$data${BASH_REMATCH[1]}"
-                tmp="${tmp#*"${BASH_REMATCH[0]}"}"
-            done
-        fi
-        
-        # INSTALL_BIN（非编译目录的文件）
-        if [[ "$line" =~ \$\(INSTALL_BIN\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]*) ]]; then
-            local src="${BASH_REMATCH[1]}" dst="${BASH_REMATCH[2]}"
-            # 排除编译目录
-            if [[ ! "$src" =~ \$\(PKG_BUILD_DIR\) ]] && [[ ! "$src" =~ \$\(GO_PKG ]] && [[ ! "$src" =~ \$\(PKG_INSTALL_DIR\) ]]; then
-                # 清理源路径前缀
-                src="${src#\$\(CURDIR\)/}"
-                src="${src#\./}"
-                # 目标以/结尾时追加文件名
-                [[ "$dst" == */ ]] && dst="${dst}$(basename "$src")"
-                
-                mkdir -p "$data$(dirname "$dst")"
-                if [ -f "$pkg_dir/$src" ]; then
-                    cp "$pkg_dir/$src" "$data$dst"
-                    chmod 755 "$data$dst"
-                    echo "    ✅ $src → $dst"
-                    found=true
+        if [ -n "$line" ]; then
+            # 提取目标路径
+            local dst=$(echo "$line" | grep -oP '\$\(1\)\K/[^[:space:]]+')
+            
+            # 以 / 结尾则追加文件名
+            [[ "$dst" == */ ]] && dst="${dst}${name}"
+            
+            # 确定权限
+            local perm=644
+            for cmd in "${!INSTALL_PERMS[@]}"; do
+                if [[ "$line" =~ $cmd ]]; then
+                    perm=${INSTALL_PERMS[$cmd]}
+                    break
                 fi
-            fi
-        fi
-        
-        # INSTALL_CONF / INSTALL_DATA
-        if [[ "$line" =~ \$\(INSTALL_(CONF|DATA)\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]*) ]]; then
-            local src="${BASH_REMATCH[2]}" dst="${BASH_REMATCH[3]}"
-            # 清理源路径前缀
-            src="${src#\$\(CURDIR\)/}"
-            src="${src#\./}"
-            # 目标以/结尾时追加文件名
-            [[ "$dst" == */ ]] && dst="${dst}$(basename "$src")"
+            done
             
             mkdir -p "$data$(dirname "$dst")"
-            if [ -f "$pkg_dir/$src" ]; then
-                cp "$pkg_dir/$src" "$data$dst"
-                chmod 644 "$data$dst"
-                echo "    ✅ $src → $dst"
-                found=true
-            fi
-        fi
-        
-        # CP
-        if [[ "$line" =~ \$\(CP\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]*) ]]; then
-            local src="${BASH_REMATCH[1]}" dst="${BASH_REMATCH[2]}"
-            src="${src#\$\(CURDIR\)/}"
-            src="${src#\./}"
-            [[ "$dst" == */ ]] && dst="${dst}$(basename "$src")"
-            
-            mkdir -p "$data$(dirname "$dst")"
-            [ -e "$pkg_dir/$src" ] && cp -a "$pkg_dir/$src" "$data$dst" && echo "    ✅ $src → $dst" && found=true
-        fi
-        
-        # LN
-        if [[ "$line" =~ \$\(LN\)[[:space:]]+([^[:space:]]+)[[:space:]]+\$\(1\)(/[^[:space:]]+) ]]; then
-            local target="${BASH_REMATCH[1]}" link="${BASH_REMATCH[2]}"
-            mkdir -p "$data$(dirname "$link")"
-            ln -sf "$target" "$data$link" && echo "    🔗 $target → $link" && found=true
-        fi
-    done <<< "$content"
-    
-    # Fallback: 扫描 files 目录
-    if [ "$found" = "false" ] && [ -d "$pkg_dir/files" ]; then
-        echo "    ⚠️ Makefile 解析失败，扫描 files/ 目录"
-        for f in "$pkg_dir/files/"*; do
-            [ -f "$f" ] || continue
-            local name=$(basename "$f")
+            cp "$f" "$data$dst"
+            chmod $perm "$data$dst"
+            echo "    ✅ $name → $dst ($perm)"
+        else
+            # Fallback: 按扩展名处理
             case "$name" in
                 *.init)
                     mkdir -p "$data/etc/init.d"
                     cp "$f" "$data/etc/init.d/${name%.init}"
                     chmod 755 "$data/etc/init.d/${name%.init}"
-                    echo "    ✅ $name → /etc/init.d/${name%.init}"
+                    echo "    ✅ $name → /etc/init.d/${name%.init} (755)"
                     ;;
                 *.config)
                     mkdir -p "$data/etc/config"
                     cp "$f" "$data/etc/config/${name%.config}"
-                    echo "    ✅ $name → /etc/config/${name%.config}"
+                    echo "    ✅ $name → /etc/config/${name%.config} (644)"
                     ;;
                 *.conf)
                     mkdir -p "$data/etc/config"
                     cp "$f" "$data/etc/config/${name%.conf}"
-                    echo "    ✅ $name → /etc/config/${name%.conf}"
+                    echo "    ✅ $name → /etc/config/${name%.conf} (644)"
                     ;;
                 *.db|*.json|*.yaml|*.yml)
                     mkdir -p "$data/etc/$PROJ_NAME"
                     cp "$f" "$data/etc/$PROJ_NAME/$name"
-                    echo "    ✅ $name → /etc/$PROJ_NAME/$name"
+                    echo "    ✅ $name → /etc/$PROJ_NAME/$name (644)"
                     ;;
                 *)
                     mkdir -p "$data/etc"
                     cp "$f" "$data/etc/$name"
-                    echo "    ✅ $name → /etc/$name"
+                    echo "    ✅ $name → /etc/$name (644)"
                     ;;
             esac
-        done
-    fi
+        fi
+    done
 }
 
 build_arch_pkg() {
@@ -247,12 +175,6 @@ build_arch_pkg() {
     rm -rf "$base_data" && mkdir -p "$base_data"
     
     echo "  🔧 架构包: $PROJ_NAME"
-    echo "  📂 解析 Makefile:"
-    
-    # 调试：打印Makefile install块
-    echo "  --- Makefile install 块 ---"
-    sed -n '/define Package.*\/install/,/^endef/p' "$ARCH_PKG_DIR/Makefile" | head -20
-    echo "  ----------------------------"
     
     parse_install "$ARCH_PKG_DIR/Makefile" "$base_data" "$ARCH_PKG_DIR"
     
@@ -260,16 +182,13 @@ build_arch_pkg() {
     [ -d "$LUCI_APP_DIR/root/etc/init.d" ] && mkdir -p "$base_data/etc/init.d" && cp -a "$LUCI_APP_DIR/root/etc/init.d/"* "$base_data/etc/init.d/" 2>/dev/null || true
     [ -d "$LUCI_APP_DIR/root/etc/config" ] && mkdir -p "$base_data/etc/config" && cp -a "$LUCI_APP_DIR/root/etc/config/"* "$base_data/etc/config/" 2>/dev/null || true
     
-    local bin_dst=$(get_bin_dst "$ARCH_PKG_DIR/Makefile")
+    local bin_dst=$(get_bin_info "$ARCH_PKG_DIR/Makefile")
     [ -z "$bin_dst" ] && bin_dst="/usr/bin/$PROJ_NAME"
-    local bin_name=$(get_bin_name "$ARCH_PKG_DIR/Makefile")
-    [ -z "$bin_name" ] && bin_name="$PROJ_NAME"
+    local bin_name=$(basename "$bin_dst")
     local init_name=$(find "$base_data/etc/init.d" -type f 2>/dev/null | head -1 | xargs -r basename)
     
-    echo "  📌 二进制名: $bin_name → $bin_dst"
-    echo "  📌 init脚本: ${init_name:-无}"
-    echo "  📂 base_data 内容:"
-    find "$base_data" -type f 2>/dev/null | sed 's|.*/arch_base_[0-9_]*/|    |' | head -20
+    echo "  📌 二进制: $bin_name → $bin_dst"
+    echo "  📌 init: ${init_name:-无}"
     
     for arch_dir in "$BIN_DIR"/*/; do
         [ -d "$arch_dir" ] || continue
@@ -419,7 +338,6 @@ pack_simple_bin() {
 }
 
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
-[ -d "$LUCI_SRC" ] && fix_data_path
 build_arch_pkg
 build_luci
 pack_simple_bin
