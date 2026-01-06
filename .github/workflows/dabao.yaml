@@ -61,7 +61,6 @@ jobs:
               continue
             fi
             
-            # 检测类型
             if [ -n "$FILTER" ]; then
               TYPE="bin"
             elif gh api "repos/$REPO/contents" --jq '.[].name' 2>/dev/null | grep -q 'go.mod'; then
@@ -111,7 +110,6 @@ jobs:
           go-version: 'stable'
           cache: false
 
-
       - name: 安装 Rust
         if: matrix.type == 'rust'
         run: |
@@ -155,9 +153,19 @@ jobs:
           if [ "$TYPE" = "go" ]; then
             echo "📥 Clone $REPO@$LATEST"
             git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
+            
+            # 前端（编译前下载到源码目录）
+            if [ "$proj" = "openlist2" ]; then
+              VER="${LATEST#v}"
+              FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
+              echo "📥 前端: $FRONTEND_URL"
+              curl -sL "$FRONTEND_URL" -o frontend.tar.gz
+              mkdir -p source/public/dist && tar xzf frontend.tar.gz -C source/public/dist --strip-components=1
+              echo "📂 前端文件: $(find source/public/dist -type f | wc -l) 个"
+            fi
+            
             cd source
             
-            # 提取名称：去掉版本后缀如 /v4
             name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | sed 's|/v[0-9]*$||' | xargs basename)
             [ -z "$name" ] && name="$proj"
             
@@ -166,7 +174,6 @@ jobs:
             
             echo "📌 模块: $name, 入口: $main"
             
-            # Go 全部 musl 架构
             declare -A GO_ARCHS=(
               [amd64]=x86_64
               [arm64]=aarch64
@@ -186,7 +193,6 @@ jobs:
               echo "🔨 Go: $pkg_name"
               mkdir -p "../bins/$pkg_name"
               
-              # 解析 GOARCH:GOARM:GOMIPS
               IFS=: read -r GOARCH GOARM_OR_MIPS <<< "$goarch"
               
               export GOOS=linux
@@ -200,6 +206,7 @@ jobs:
               esac
               
               go build -trimpath -ldflags="-s -w" -o "../bins/$pkg_name/$name" "./$main"
+              ls -lh "../bins/$pkg_name/$name"
             done
             cd ..
             
@@ -213,7 +220,6 @@ jobs:
             
             echo "📌 模块: $name"
             
-            # Rust musl 架构
             declare -A RUST_ARCHS=(
               [x86_64-unknown-linux-musl]=x86_64
               [aarch64-unknown-linux-musl]=aarch64
@@ -268,7 +274,7 @@ jobs:
           fi
           
           echo "📂 包: $(ls bins 2>/dev/null | wc -l) 个"
-          ls bins/
+          ls -lh bins/*/
           
           # === LuCI ===
           LUCI_DIR=""
@@ -282,15 +288,6 @@ jobs:
               find "$LUCI_DIR" -type f \( -name "*.lua" -o -name "*.js" -o -name "*.htm" -o -name "*.sh" -o -name "*init*" -o -name "*.conf" -o -name "*.json" \) \
                 -exec sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" {} \; 2>/dev/null || true
             fi
-          fi
-          
-          # === 前端（仅 openlist） ===
-          if [ "$proj" = "openlist2" ]; then
-            VER="${LATEST#v}"
-            FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
-            echo "📥 前端: $FRONTEND_URL"
-            curl -sL "$FRONTEND_URL" -o frontend.tar.gz
-            mkdir -p public/dist && tar xzf frontend.tar.gz -C public/dist --strip-components=1
           fi
           
           # === 打包 ===
@@ -309,7 +306,7 @@ jobs:
           .github/workflows/scripts/release.sh
           
           echo "✅ $proj 完成"
-          
+
       - name: 保存版本
         if: success()
         run: |
