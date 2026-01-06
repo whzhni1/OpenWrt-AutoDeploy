@@ -174,7 +174,7 @@ jobs:
               main="./cmd/$name"
             elif [ -f "./cmd/main.go" ]; then
               main="./cmd"
-            elif [ -d "./cmd" ] && grep -q 'package main' ./cmd/*.go 2>/dev/null; then
+            elif [ -d "./cmd" ] && [ "$(ls ./cmd/*.go 2>/dev/null | wc -l)" -gt 0 ]; then
               main="./cmd"
             else
               main="."
