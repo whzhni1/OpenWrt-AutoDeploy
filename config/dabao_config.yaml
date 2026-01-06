@@ -6,7 +6,7 @@ defaults:
 
 projects:
   openlist:
-    repo: OpenListTeam/OpenList
+    repo: OpenListTeam/openlist
     luci_repo: sbwml/luci-app-openlist2
     platforms: r2 gitlab
 
