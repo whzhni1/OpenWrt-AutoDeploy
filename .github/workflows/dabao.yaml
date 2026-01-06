@@ -164,7 +164,7 @@ jobs:
             git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
             
             # 前端（仅 openlist）
-            if [ "$proj" = "openlist2" ]; then
+            if [ "$proj" = "openlist" ]; then
               VER="${LATEST#v}"
               FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
               echo "📥 前端: $FRONTEND_URL"
