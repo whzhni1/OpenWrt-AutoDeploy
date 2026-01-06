@@ -12,8 +12,10 @@ TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 mkdir -p "$OUT_DIR"
 
+# ========== Makefile 解析 ==========
+
 # 查找目录并确定项目名
-LUCI_APP_DIR="" ARCH_PKG_DIR="" PROJ_NAME=""
+LUCI_APP_DIR="" ARCH_PKG_DIR="" PROJ_NAME="" PKG_DEPS=""
 if [ -d "$LUCI_SRC" ]; then
     LUCI_APP_DIR=$(find "$LUCI_SRC" -maxdepth 1 -type d -name "luci-app-*" | head -1)
     if [ -n "$LUCI_APP_DIR" ]; then
@@ -26,31 +28,35 @@ fi
 echo "$PROJ_NAME" > "$OUT_DIR/.proj_name"
 echo "📌 项目名: $PROJ_NAME"
 
-# 从 Makefile 提取变量值
-get_makefile_var() {
-    local file="$1" var="$2"
-    grep -E "^${var}\s*:?=" "$file" 2>/dev/null | head -1 | sed 's/.*:*=\s*//' | tr -d ' '
-}
-
-# 从 Makefile 提取二进制安装路径和名字
-get_bin_info() {
+# 从 Makefile 提取依赖
+get_deps() {
     local makefile="$1"
     [ -f "$makefile" ] || return
-    
-    local content=$(tr '\t' ' ' < "$makefile")
-    
-    # 匹配 INSTALL_BIN 行中的 PKG_INSTALL_DIR/GO_PKG_BUILD_BIN_DIR/PKG_BUILD_DIR
-    local line=$(echo "$content" | grep -E 'INSTALL_BIN.*\$\((PKG_INSTALL_DIR|GO_PKG_BUILD_BIN_DIR|PKG_BUILD_DIR)\)' | head -1)
-    [ -z "$line" ] && return
-    
-    # 提取目标路径 $(1)/xxx
-    local dst=$(echo "$line" | grep -oP '\$\(1\)\K/[^[:space:]]+' | head -1)
-    echo "$dst"
+    grep -E '^\s*DEPENDS\s*:?=' "$makefile" | grep -oE '\+[a-zA-Z0-9_-]+' | sed 's/^+//' | sort -u | tr '\n' ' '
 }
 
-get_luci_version() {
-    [ -f "$LUCI_APP_DIR/Makefile" ] && get_makefile_var "$LUCI_APP_DIR/Makefile" "PKG_VERSION"
+# 从 Makefile 提取二进制安装路径
+get_bin_dst() {
+    local makefile="$1"
+    [ -f "$makefile" ] || return
+    local content=$(tr '\t' ' ' < "$makefile")
+    echo "$content" | grep -E 'INSTALL_BIN.*\$\((PKG_INSTALL_DIR|GO_PKG_BUILD_BIN_DIR|PKG_BUILD_DIR)\)' | \
+        grep -oP '\$\(1\)\K/[^[:space:]]+' | head -1
 }
+
+# 从 Makefile 提取 LuCI 版本
+get_luci_version() {
+    [ -f "$LUCI_APP_DIR/Makefile" ] || return
+    grep -E "^PKG_VERSION\s*:?=" "$LUCI_APP_DIR/Makefile" | head -1 | sed 's/.*:*=\s*//' | tr -d ' '
+}
+
+# 提取架构包依赖
+if [ -f "$ARCH_PKG_DIR/Makefile" ]; then
+    PKG_DEPS=$(get_deps "$ARCH_PKG_DIR/Makefile")
+    [ -n "$PKG_DEPS" ] && echo "📦 依赖: $PKG_DEPS"
+fi
+
+# ========== 工具函数 ==========
 
 do_upx() { [ "$PKG_UPX" = "true" ] && upx --best --lzma "$1" 2>/dev/null || true; }
 
@@ -85,23 +91,14 @@ Description: $desc
 EOF
 }
 
-# ========== 简化的 parse_install ==========
-# 安装命令 → 权限映射
-declare -A INSTALL_PERMS=(
-    [INSTALL_BIN]=755
-    [INSTALL_SBIN]=755
-    [INSTALL_CONF]=644
-    [INSTALL_DATA]=644
-    [CP]=644
-)
+# ========== files 目录处理 ==========
 
-parse_install() {
-    local makefile="$1" data="$2" pkg_dir="$3"
-    local files_dir="$pkg_dir/files"
-    
+declare -A INSTALL_PERMS=([INSTALL_BIN]=755 [INSTALL_SBIN]=755 [INSTALL_CONF]=644 [INSTALL_DATA]=644 [CP]=644)
+
+parse_files() {
+    local makefile="$1" data="$2" files_dir="$3"
     [ -d "$files_dir" ] || return 0
     
-    # 读取 Makefile 内容，Tab 转空格，合并续行
     local mf_content=""
     [ -f "$makefile" ] && mf_content=$(sed ':a;N;$!ba;s/\\\n//g' "$makefile" | tr '\t' ' ')
     
@@ -110,24 +107,15 @@ parse_install() {
     for f in "$files_dir"/*; do
         [ -f "$f" ] || continue
         local name=$(basename "$f")
-        
-        # 在 Makefile 中查找包含该文件名的行
         local line=$(echo "$mf_content" | grep -E "[^a-zA-Z0-9_]${name}[^a-zA-Z0-9_].*\\\$\(1\)" | head -1)
         
         if [ -n "$line" ]; then
-            # 提取目标路径
             local dst=$(echo "$line" | grep -oP '\$\(1\)\K/[^[:space:]]+')
-            
-            # 以 / 结尾则追加文件名
             [[ "$dst" == */ ]] && dst="${dst}${name}"
             
-            # 确定权限
             local perm=644
             for cmd in "${!INSTALL_PERMS[@]}"; do
-                if [[ "$line" =~ $cmd ]]; then
-                    perm=${INSTALL_PERMS[$cmd]}
-                    break
-                fi
+                [[ "$line" =~ $cmd ]] && { perm=${INSTALL_PERMS[$cmd]}; break; }
             done
             
             mkdir -p "$data$(dirname "$dst")"
@@ -135,38 +123,19 @@ parse_install() {
             chmod $perm "$data$dst"
             echo "    ✅ $name → $dst ($perm)"
         else
-            # Fallback: 按扩展名处理
             case "$name" in
-                *.init)
-                    mkdir -p "$data/etc/init.d"
-                    cp "$f" "$data/etc/init.d/${name%.init}"
-                    chmod 755 "$data/etc/init.d/${name%.init}"
-                    echo "    ✅ $name → /etc/init.d/${name%.init} (755)"
-                    ;;
-                *.config)
-                    mkdir -p "$data/etc/config"
-                    cp "$f" "$data/etc/config/${name%.config}"
-                    echo "    ✅ $name → /etc/config/${name%.config} (644)"
-                    ;;
-                *.conf)
-                    mkdir -p "$data/etc/config"
-                    cp "$f" "$data/etc/config/${name%.conf}"
-                    echo "    ✅ $name → /etc/config/${name%.conf} (644)"
-                    ;;
-                *.db|*.json|*.yaml|*.yml)
-                    mkdir -p "$data/etc/$PROJ_NAME"
-                    cp "$f" "$data/etc/$PROJ_NAME/$name"
-                    echo "    ✅ $name → /etc/$PROJ_NAME/$name (644)"
-                    ;;
-                *)
-                    mkdir -p "$data/etc"
-                    cp "$f" "$data/etc/$name"
-                    echo "    ✅ $name → /etc/$name (644)"
-                    ;;
+                *.init) mkdir -p "$data/etc/init.d"; cp "$f" "$data/etc/init.d/${name%.init}"; chmod 755 "$data/etc/init.d/${name%.init}" ;;
+                *.config) mkdir -p "$data/etc/config"; cp "$f" "$data/etc/config/${name%.config}" ;;
+                *.conf) mkdir -p "$data/etc/config"; cp "$f" "$data/etc/config/${name%.conf}" ;;
+                *.db|*.json|*.yaml|*.yml) mkdir -p "$data/etc/$PROJ_NAME"; cp "$f" "$data/etc/$PROJ_NAME/$name" ;;
+                *) mkdir -p "$data/etc"; cp "$f" "$data/etc/$name" ;;
             esac
+            echo "    ✅ $name (fallback)"
         fi
     done
 }
+
+# ========== 架构包打包 ==========
 
 build_arch_pkg() {
     [ -d "$ARCH_PKG_DIR" ] && [ -f "$ARCH_PKG_DIR/Makefile" ] || return 0
@@ -176,19 +145,21 @@ build_arch_pkg() {
     
     echo "  🔧 架构包: $PROJ_NAME"
     
-    parse_install "$ARCH_PKG_DIR/Makefile" "$base_data" "$ARCH_PKG_DIR"
+    parse_files "$ARCH_PKG_DIR/Makefile" "$base_data" "$ARCH_PKG_DIR/files"
     
     # 合并 luci-app 的 init.d 和 config
     [ -d "$LUCI_APP_DIR/root/etc/init.d" ] && mkdir -p "$base_data/etc/init.d" && cp -a "$LUCI_APP_DIR/root/etc/init.d/"* "$base_data/etc/init.d/" 2>/dev/null || true
     [ -d "$LUCI_APP_DIR/root/etc/config" ] && mkdir -p "$base_data/etc/config" && cp -a "$LUCI_APP_DIR/root/etc/config/"* "$base_data/etc/config/" 2>/dev/null || true
     
-    local bin_dst=$(get_bin_info "$ARCH_PKG_DIR/Makefile")
+    local bin_dst=$(get_bin_dst "$ARCH_PKG_DIR/Makefile")
     [ -z "$bin_dst" ] && bin_dst="/usr/bin/$PROJ_NAME"
     local bin_name=$(basename "$bin_dst")
     local init_name=$(find "$base_data/etc/init.d" -type f 2>/dev/null | head -1 | xargs -r basename)
     
     echo "  📌 二进制: $bin_name → $bin_dst"
     echo "  📌 init: ${init_name:-无}"
+    
+    local deps="libc${PKG_DEPS:+, $PKG_DEPS}"
     
     for arch_dir in "$BIN_DIR"/*/; do
         [ -d "$arch_dir" ] || continue
@@ -211,7 +182,7 @@ build_arch_pkg() {
         [ -d "$data/etc/config" ] && find "$data/etc/config" -type f 2>/dev/null | sed "s|^$data||" > "$ctrl/conffiles"
         [ -s "$ctrl/conffiles" ] || rm -f "$ctrl/conffiles"
         
-        write_control "$ctrl" "$PROJ_NAME" "$PKG_VERSION" "libc${PKG_DEPS:+, $PKG_DEPS}" "$PROJ_NAME" "$data"
+        write_control "$ctrl" "$PROJ_NAME" "$PKG_VERSION" "$deps" "$PROJ_NAME" "$data"
         
         for fmt in ipk apk; do
             local post="postinst" pre="prerm" postrm="postrm"
@@ -246,6 +217,8 @@ EOF
     rm -rf "$base_data"
 }
 
+# ========== LuCI 包打包 ==========
+
 build_luci() {
     [ -d "$LUCI_APP_DIR" ] || return 0
     
@@ -253,6 +226,9 @@ build_luci() {
     local luci_base="${luci_name#luci-app-}"
     local luci_ver=$(get_luci_version); [ -z "$luci_ver" ] && luci_ver="$PKG_VERSION"
     local data="$TEMP_DIR/luci_data_$$" ctrl="$TEMP_DIR/luci_ctrl_$$"
+    
+    # 提取 LuCI 依赖
+    local luci_deps=$(get_deps "$LUCI_APP_DIR/Makefile")
     
     echo "  🔧 LuCI: $luci_name (v$luci_ver)"
     rm -rf "$data" "$ctrl" && mkdir -p "$data" "$ctrl"
@@ -268,7 +244,8 @@ build_luci() {
     [ -z "$(ls -A "$data" 2>/dev/null)" ] && { rm -rf "$data" "$ctrl"; return 0; }
     fix_perms "$data"
     
-    write_control "$ctrl" "$luci_name" "$luci_ver" "$PROJ_NAME, luci-base${LUCI_DEPS:+, $LUCI_DEPS}" "LuCI support for $PROJ_NAME" "$data"
+    local deps="$PROJ_NAME, luci-base${luci_deps:+, $luci_deps}"
+    write_control "$ctrl" "$luci_name" "$luci_ver" "$deps" "LuCI support for $PROJ_NAME" "$data"
     
     for fmt in ipk apk; do
         local post="postinst"; [ "$fmt" = "apk" ] && post=".post-install"
@@ -289,6 +266,7 @@ EOF
 build_luci_i18n() {
     local luci_name="$1" luci_ver="$2"
     local luci_base="${luci_name#luci-app-}"
+    
     for lang_dir in "$LUCI_APP_DIR/po"/*/; do
         [ -d "$lang_dir" ] || continue
         local lang=$(basename "$lang_dir"); [ "$lang" = "templates" ] && continue
@@ -313,6 +291,8 @@ build_luci_i18n() {
     done
 }
 
+# ========== 简单二进制打包 ==========
+
 pack_simple_bin() {
     [ -d "$ARCH_PKG_DIR" ] && return 0
     
@@ -330,12 +310,14 @@ pack_simple_bin() {
         do_upx "$bin"
         cp "$bin" "$data/usr/bin/$PKG_NAME" && chmod 755 "$data/usr/bin/$PKG_NAME"
         
-        write_control "$ctrl" "$PKG_NAME" "$PKG_VERSION" "libc${PKG_DEPS:+, $PKG_DEPS}" "$PKG_NAME" "$data"
+        write_control "$ctrl" "$PKG_NAME" "$PKG_VERSION" "libc" "$PKG_NAME" "$data"
         
         for fmt in ipk apk; do do_pack "${arch_name}_${PKG_VERSION}" "$data" "$ctrl" "$fmt"; done
         rm -rf "$data" "$ctrl"
     done
 }
+
+# ========== 主逻辑 ==========
 
 echo "📦 打包: $PKG_NAME v$PKG_VERSION"
 build_arch_pkg
