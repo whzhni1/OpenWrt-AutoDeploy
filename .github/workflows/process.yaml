@@ -1,4 +1,4 @@
-name: 编译 OpenWrt 软件包
+name: 打包 OpenWrt 软件包
 
 on:
   workflow_dispatch:
@@ -7,26 +7,29 @@ on:
         description: '指定项目（逗号分隔，留空全部）'
         required: false
       force:
-        description: '强制重新编译'
+        description: '强制重新打包'
         type: boolean
         default: false
+      fix_path:
+        description: '修改默认路径至config'
+        type: boolean
+        default: true
   schedule:
     - cron: '0 2 * * *'
 
 env:
-  CONFIG_FILE: config/compile_config.yaml
+  CONFIG_FILE: config/dabao_config.yaml
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      build_matrix: ${{ steps.gen.outputs.build_matrix }}
-      release_matrix: ${{ steps.gen.outputs.release_matrix }}
+      matrix: ${{ steps.matrix.outputs.result }}
     steps:
       - uses: actions/checkout@v4
       
       - name: 生成矩阵
-        id: gen
+        id: matrix
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_PROJECTS: ${{ inputs.projects }}
@@ -35,206 +38,87 @@ jobs:
           chmod +x .github/workflows/scripts/*.sh
           
           PROJECTS=$(yq e '.projects | keys | .[]' "$CONFIG_FILE")
-          ARCHS=$(yq e '.defaults.archs[]' "$CONFIG_FILE")
-          SDKS=$(yq e '.defaults.sdks[]' "$CONFIG_FILE")
-          UPX_EXCLUDE=$(yq e '.defaults.upx_exclude[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' '|' | sed 's/|$//')
           
-          [ -n "$INPUT_PROJECTS" ] && PROJECTS=$(echo "$PROJECTS" | grep -E "^($(echo "$INPUT_PROJECTS" | tr ',' '|'))$" || true)
+          if [ -n "$INPUT_PROJECTS" ]; then
+            FILTER_PATTERN=$(echo "$INPUT_PROJECTS" | tr ',' '|')
+            PROJECTS=$(echo "$PROJECTS" | grep -E "^($FILTER_PATTERN)$" || true)
+          fi
           
-          BUILD_ITEMS=()
-          RELEASE_ITEMS=()
+          MATRIX="["
+          first=true
           
           for proj in $PROJECTS; do
-            SOURCE_REPO=$(yq e ".projects.$proj.source_repo" "$CONFIG_FILE")
-            LUCI_REPO=$(yq e ".projects.$proj.luci_repo // \"\"" "$CONFIG_FILE")
-            UPX=$(yq e ".projects.$proj.upx // .defaults.upx // true" "$CONFIG_FILE")
+            REPO=$(yq e ".projects.$proj.repo" "$CONFIG_FILE")
+            CFG_TYPE=$(yq e ".projects.$proj.type // \"\"" "$CONFIG_FILE")
             
-            LATEST=$(gh api repos/$SOURCE_REPO/releases/latest --jq '.tag_name' 2>/dev/null || \
-                     gh api repos/$SOURCE_REPO/tags --jq '.[0].name' 2>/dev/null || echo "")
+            LATEST=$(gh api repos/$REPO/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
             [ -z "$LATEST" ] && continue
             
             CURRENT=$(.github/workflows/scripts/version-manager.sh read "$proj" 2>/dev/null || echo "")
             
-            if [ "$FORCE_BUILD" != "true" ] && [ "$LATEST" = "$CURRENT" ]; then
+            if [ "$FORCE_BUILD" != "true" ] && [ "${LATEST#v}" = "${CURRENT#v}" ]; then
               echo "⏭️ $proj 已最新 $CURRENT"
               continue
             fi
             
-            echo "✅ $proj: $CURRENT → $LATEST"
-            
-            RELEASE_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\"}")
-            
-            # LuCI（遍历 SDK，固定 x86_64）
-            if [ -n "$LUCI_REPO" ]; then
-              for sdk in $SDKS; do
-                BUILD_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"luci\",\"arch\":\"x86_64\",\"sdk\":\"$sdk\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":false}")
-              done
+            # 检测类型
+            if [ -n "$CFG_TYPE" ]; then
+              TYPE="$CFG_TYPE"
+            elif gh api "repos/$REPO/releases/tags/$LATEST" --jq '.assets[].name' 2>/dev/null | grep -qiE 'linux.*(amd64|x86_64|arm|aarch)'; then
+              TYPE="bin"
+            elif gh api "repos/$REPO/contents" --jq '.[].name' 2>/dev/null | grep -q 'go.mod'; then
+              TYPE="go"
+            elif gh api "repos/$REPO/contents" --jq '.[].name' 2>/dev/null | grep -q 'Cargo.toml'; then
+              TYPE="rust"
+            else
+              TYPE="bin"
             fi
             
-            # 架构包（arch × sdk）
-            for arch in $ARCHS; do
-              arch_upx=$UPX
-              [ -n "$UPX_EXCLUDE" ] && [[ "$arch" =~ ^($UPX_EXCLUDE)$ ]] && arch_upx=false
-              
-              for sdk in $SDKS; do
-                BUILD_ITEMS+=("{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"bin\",\"arch\":\"$arch\",\"sdk\":\"$sdk\",\"source_repo\":\"$SOURCE_REPO\",\"luci_repo\":\"$LUCI_REPO\",\"upx\":$arch_upx}")
-              done
-            done
+            echo "✅ $proj: $CURRENT → $LATEST ($TYPE)"
+            
+            [ "$first" = "true" ] && first=false || MATRIX="$MATRIX,"
+            MATRIX="$MATRIX{\"project\":\"$proj\",\"version\":\"$LATEST\",\"type\":\"$TYPE\"}"
           done
           
-          BUILD_MATRIX="{\"include\":[$(IFS=,; echo "${BUILD_ITEMS[*]}")]}"
-          RELEASE_MATRIX="{\"include\":[$(IFS=,; echo "${RELEASE_ITEMS[*]}")]}"
-          
-          echo "build_matrix=$BUILD_MATRIX" >> $GITHUB_OUTPUT
-          echo "release_matrix=$RELEASE_MATRIX" >> $GITHUB_OUTPUT
-          
-          echo "📊 编译任务: ${#BUILD_ITEMS[@]} 个"
-          echo "📊 发布任务: ${#RELEASE_ITEMS[@]} 个"
+          MATRIX="$MATRIX]"
+          echo "result=$MATRIX" >> $GITHUB_OUTPUT
+          echo "📋 矩阵: $MATRIX"
 
   build:
     needs: prepare
-    if: needs.prepare.outputs.build_matrix != '{"include":[]}'
+    if: needs.prepare.outputs.matrix != '[]'
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
-      max-parallel: 10
-      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
+      max-parallel: 5
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     
     steps:
       - uses: actions/checkout@v4
 
-      - name: 编译缓存
-        if: matrix.type == 'bin'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ matrix.arch }}-${{ matrix.project }}-${{ matrix.version }}
-          restore-keys: |
-            ${{ matrix.arch }}-${{ matrix.project }}-
-            ${{ matrix.arch }}-
-
-      - name: 准备源码
-        id: prep
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 安装依赖
         run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl musl-tools
+          git clone --depth 1 https://github.com/openwrt/luci.git /tmp/luci
+          make -C /tmp/luci/modules/luci-base/src po2lmo
+          sudo cp /tmp/luci/modules/luci-base/src/po2lmo /usr/local/bin/
           chmod +x .github/workflows/scripts/*.sh
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 ${{ matrix.project }} ${{ matrix.version }} [${{ matrix.type }}] (${{ matrix.arch }}-${{ matrix.sdk }})"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          mkdir -p feeds/packages
-          PROJ_NAME="${{ matrix.project }}"
-          
-          if [ -n "${{ matrix.luci_repo }}" ]; then
-            git clone --depth 1 "https://github.com/${{ matrix.luci_repo }}.git" luci-repo
-            
-            LUCI_APP=$(find luci-repo -maxdepth 1 -type d -name "luci-app-*" | head -1)
-            if [ -n "$LUCI_APP" ]; then
-              PROJ_NAME=$(basename "$LUCI_APP" | sed 's/^luci-app-//')
-              [ "${{ matrix.type }}" = "luci" ] && mv "$LUCI_APP" feeds/packages/
-              [ -d "luci-repo/$PROJ_NAME" ] && mv "luci-repo/$PROJ_NAME" feeds/packages/
-            fi
-            rm -rf luci-repo
-          fi
-          
-          [ ! -d "feeds/packages/$PROJ_NAME" ] && mkdir -p "feeds/packages/$PROJ_NAME"
-          
-          if [ "${{ matrix.type }}" = "luci" ]; then
-            PACKAGES="luci-app-$PROJ_NAME"
-          else
-            PACKAGES="$PROJ_NAME"
-            .github/workflows/scripts/process-makefile.sh "$PROJ_NAME" "${{ matrix.version }}" "${{ matrix.source_repo }}" "feeds/packages" "${{ matrix.upx }}"
-          fi
-          
-          echo "proj_name=$PROJ_NAME" >> $GITHUB_OUTPUT
-          echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
 
-      - name: 编译
-        id: compile
-        continue-on-error: true
-        uses: sbwml/openwrt-gh-action-sdk@go1.25
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: ${{ steps.prep.outputs.packages }}
-          NO_REFRESH_CHECK: true
-          IGNORE_ERRORS: true
+      - name: 安装 Go
+        if: matrix.type == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
 
-      - name: 收集产物
-        if: steps.compile.outcome == 'success'
-        id: collect
+      - name: 安装 Rust
+        if: matrix.type == 'rust'
         run: |
-          mkdir -p output
-          PROJ="${{ steps.prep.outputs.proj_name }}"
-          ARCH="${{ matrix.arch }}"
-          TYPE="${{ matrix.type }}"
-          
-          PKG_DIR="bin/packages/$ARCH/packages_ci"
-          [ "$ARCH" = "riscv64_riscv64" ] && [ "${{ matrix.sdk }}" = "SNAPSHOT" ] && PKG_DIR="bin/packages/riscv64_generic/packages_ci"
-          
-          for pkg in "$PKG_DIR"/*.{ipk,apk}; do
-            [ -f "$pkg" ] || continue
-            filename=$(basename "$pkg")
-            ext="${filename##*.}"
-            
-            if [ "$TYPE" = "luci" ]; then
-              # LuCI 包：匹配 luci-*openlist2*
-              [[ "$filename" == luci-*${PROJ}* ]] || continue
-              newname=$(echo "$filename" | sed -E 's/-([0-9])/_\1/; s/-r([0-9]+)\./_r\1_all./')
-            else
-              [[ "$filename" == ${PROJ}[_-]* ]] || continue
-              # 统一格式：xxx_version_arch.ipk/apk
-              if [[ "$filename" == *_${ARCH}.* ]] || [[ "$filename" == *_${ARCH}_* ]]; then
-                newname="$filename"
-              else
-                newname=$(echo "$filename" | sed -E "s/-r([0-9]+)\./_r\1_${ARCH}./; s/^${PROJ}-/${PROJ}_/")
-              fi
-            fi
-            
-            cp "$pkg" "output/$newname"
-            [ "$filename" != "$newname" ] && echo "  📄 $filename → $newname"
-          done
-          
-          count=$(ls -1 output/ 2>/dev/null | wc -l)
-          echo "count=$count" >> $GITHUB_OUTPUT
-          echo "📦 产物: $count 个"
-          ls -lh output/
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf i686-unknown-linux-musl
 
-      - name: 上传产物
-        if: steps.collect.outputs.count != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.project }}-${{ matrix.type }}-${{ matrix.arch }}-${{ matrix.sdk }}
-          path: output/
-          retention-days: 1
-
-  release:
-    needs: [prepare, build]
-    if: needs.prepare.outputs.release_matrix != '{"include":[]}'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.release_matrix) }}
-    
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 下载产物
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ${{ matrix.project }}-*
-          path: output/
-          merge-multiple: true
-
-      - name: 发布
+      - name: 处理 ${{ matrix.project }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
@@ -243,77 +127,156 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          FIX_PATH: ${{ inputs.fix_path }}
         run: |
-          chmod +x .github/workflows/scripts/*.sh
+          proj="${{ matrix.project }}"
+          LATEST="${{ matrix.version }}"
+          TYPE="${{ matrix.type }}"
           
-          count=$(ls -1 output/ 2>/dev/null | wc -l)
-          echo "📦 ${{ matrix.project }} ${{ matrix.version }} 共 $count 个产物"
-          ls -lh output/
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 $proj $LATEST [$TYPE]"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          [ "$count" -eq 0 ] && echo "⚠️ 无产物，跳过发布" && exit 0
+          cfg() { yq e ".projects.$proj.$1 // \"\"" "$CONFIG_FILE"; }
+          cfg_arr() { yq e ".projects.$proj.$1 // [] | .[]" "$CONFIG_FILE" | tr '\n' ' '; }
+          cfg_def() { yq e ".projects.$proj.$1 // .defaults.$1 // \"$2\"" "$CONFIG_FILE"; }
+          def() { yq e ".defaults.$1 // \"\"" "$CONFIG_FILE"; }
           
-          PROJ_NAME="${{ matrix.project }}"
-          [ -n "${{ matrix.luci_repo }}" ] && LUCI_NAME=$(ls output/ | grep -oP 'luci-app-\K[^_-]+' | head -1) && [ -n "$LUCI_NAME" ] && PROJ_NAME="$LUCI_NAME"
+          REPO=$(cfg repo)
+          LUCI_REPO=$(cfg luci_repo)
+          FRONTEND=$(cfg frontend | sed "s/\${VERSION}/${LATEST#v}/g")
+          ARCHS=$(yq e '.defaults.archs // ["x86_64","aarch64","armv7","armv5","i686"] | .[]' "$CONFIG_FILE" | tr '\n' ' ')
           
+          mkdir -p downloads bins output
+          
+          # === 获取/编译二进制 ===
+          if [ "$TYPE" = "go" ] || [ "$TYPE" = "rust" ]; then
+            echo "📥 Clone $REPO@$LATEST"
+            git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
+            
+            if [ "$TYPE" = "go" ]; then
+              cd source
+              name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | xargs basename)
+              [ -z "$name" ] && name="$proj"
+              main=$(find . -name "main.go" -path "*/cmd/*" -exec dirname {} \; 2>/dev/null | head -1)
+              [ -z "$main" ] && main="."
+              
+              declare -A GO_MAP=([x86_64]="amd64:" [aarch64]="arm64:" [armv7]="arm:7" [armv6]="arm:6" [armv5]="arm:5" [i686]="386:" [mips]="mips:" [mipsel]="mipsle:")
+              
+              for arch in $ARCHS; do
+                echo "🔨 Go: $arch"
+                IFS=: read -r GOARCH GOARM <<< "${GO_MAP[$arch]}"
+                mkdir -p "../bins/$arch"
+                
+                GOOS=linux GOARCH=$GOARCH ${GOARM:+GOARM=$GOARM} CGO_ENABLED=0 \
+                  go build -trimpath -ldflags="-s -w" -o "../bins/$arch/$name" "./$main"
+              done
+              cd ..
+              
+            elif [ "$TYPE" = "rust" ]; then
+              cd source
+              declare -A RUST_MAP=([x86_64]=x86_64-unknown-linux-musl [aarch64]=aarch64-unknown-linux-musl [armv7]=armv7-unknown-linux-musleabihf [i686]=i686-unknown-linux-musl)
+              
+              for arch in $ARCHS; do
+                target="${RUST_MAP[$arch]}"
+                [ -z "$target" ] && continue
+                echo "🔨 Rust: $arch ($target)"
+                mkdir -p "../bins/$arch"
+                
+                cargo build --release --target "$target"
+                find "target/$target/release" -maxdepth 1 -type f -executable ! -name "*.so" -exec cp {} "../bins/$arch/" \;
+              done
+              cd ..
+            fi
+            
+          else
+            # 下载二进制
+            FILTER=$(cfg filter)
+            echo "📥 下载二进制 (filter: ${FILTER:-*})"
+            
+            while read url; do
+              name=$(basename "$url")
+              [ -n "$FILTER" ] && { case "$name" in $FILTER) ;; *) continue ;; esac; }
+              
+              skip=false
+              for ex in $(cfg_arr exclude); do
+                case "$name" in $ex) skip=true; break ;; esac
+              done
+              [ "$skip" = "true" ] && continue
+              
+              echo "  ⬇️ $name"
+              curl -sL "$url" -o "downloads/$name"
+            done < <(gh api repos/$REPO/releases/tags/$LATEST --jq '.assets[].browser_download_url' 2>/dev/null)
+            
+            # 解压
+            for f in downloads/*; do
+              [ -f "$f" ] || continue
+              tmp=$(mktemp -d)
+              case "$f" in
+                *.tar.gz|*.tgz) tar -xzf "$f" -C "$tmp" ;;
+                *.tar.xz) tar -xJf "$f" -C "$tmp" ;;
+                *.zip) unzip -q "$f" -d "$tmp" ;;
+                *.gz) gunzip -c "$f" > "$tmp/$(basename "${f%.gz}")" ;;
+                *) cp "$f" "$tmp/" ;;
+              esac
+              arch_name=$(basename "$f" | sed 's/\.\(tar\.gz\|tgz\|tar\.xz\|zip\|gz\)$//')
+              mkdir -p "bins/$arch_name"
+              find "$tmp" -type f -executable -exec cp {} "bins/$arch_name/" \;
+              rm -rf "$tmp"
+            done
+          fi
+          
+          echo "📂 架构: $(ls bins 2>/dev/null | wc -l) 个"
+          
+          # === LuCI ===
+          LUCI_DIR=""
+          if [ -n "$LUCI_REPO" ]; then
+            echo "📥 LuCI: $LUCI_REPO"
+            git clone --depth 1 "https://github.com/$LUCI_REPO.git" luci-src
+            LUCI_DIR="luci-src"
+            
+            if [ "${FIX_PATH:-true}" = "true" ]; then
+              echo "🔧 修改路径: /etc/$proj → /etc/config/${proj}_data"
+              find "$LUCI_DIR" -type f \( -name "*.lua" -o -name "*.js" -o -name "*.htm" -o -name "*.sh" -o -name "*init*" -o -name "*.conf" -o -name "*.json" \) \
+                -exec sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" {} \; 2>/dev/null || true
+            fi
+          fi
+          
+          # === 前端 ===
+          if [ -n "$FRONTEND" ]; then
+            echo "📥 前端: $FRONTEND"
+            curl -sL "$FRONTEND" -o frontend.tar.gz
+            mkdir -p public/dist && tar xzf frontend.tar.gz -C public/dist --strip-components=1 2>/dev/null || unzip -q frontend.tar.gz -d public/dist
+          fi
+          
+          # === 打包 ===
+          export PKG_DEPS="$(cfg_arr deps)"
+          export PKG_UPX="$(cfg_def upx true)"
+          export LUCI_DEPS="$(cfg_arr luci_deps)"
+          
+          .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
+          
+          # === 发布 ===
+          PROJ_NAME=$(cat output/.proj_name 2>/dev/null || echo "$proj")
           export REPO_NAME="$PROJ_NAME"
-          export TAG_NAME="${{ matrix.version }}"
+          export TAG_NAME="$LATEST"
           export DOWNLOAD_DIR="output"
-          export PLATFORMS=$(yq e '.defaults.platforms[]' "$CONFIG_FILE" 2>/dev/null | tr '\n' ' ')
-          export R2_PUBLIC_URL=$(yq e '.defaults.R2_PUBLIC_URL // ""' "$CONFIG_FILE")
-          export USERNAME=$(yq e '.defaults.username // ""' "$CONFIG_FILE")
+          export PLATFORMS="$(cfg_def platforms "$(def platforms)")"
+          export R2_PUBLIC_URL="$(def R2_PUBLIC_URL)"
+          export USERNAME="$(def username)"
           .github/workflows/scripts/release.sh
+          
+          echo "✅ $proj 完成"
 
-      - name: 记录版本
-        run: mkdir -p /tmp/version-info && echo "${{ matrix.project }}|${{ matrix.version }}" > /tmp/version-info/update.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: version-${{ matrix.project }}
-          path: /tmp/version-info/
-          retention-days: 1
-
-  summary:
-    needs: release
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: 更新版本记录
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 保存版本
+        if: success()
         run: |
-          chmod +x .github/workflows/scripts/*.sh
-          
-          gh run download ${{ github.run_id }} -p "version-*" -D /tmp/versions 2>/dev/null || true
-          
-          updated=0
-          for file in /tmp/versions/version-*/update.txt; do
-            [ -f "$file" ] || continue
-            IFS='|' read -r name version < "$file"
-            [ -n "$name" ] && [ -n "$version" ] && {
-              .github/workflows/scripts/version-manager.sh write "$name" "$version"
-              echo "✅ $name → $version"
-              ((updated++)) || true
-            }
-          done
-          
-          [ "$updated" -gt 0 ] || exit 0
+          proj="${{ matrix.project }}"
+          .github/workflows/scripts/version-manager.sh write "$proj" "${{ matrix.version }}"
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase || true
           git add config/version.txt
-          git diff --cached --quiet || {
-            git commit -m "📝 更新版本记录"
-            for i in 1 2 3; do
-              git pull --rebase origin main && git push && break || sleep $((i * 3))
-            done
-          }
-
-      - name: 清理
-        uses: geekyeggo/delete-artifact@v5
-        with:
-          name: |
-            version-*
-            *-*-*-*
-          failOnError: false
+          git commit -m "📦 $proj → ${{ matrix.version }}" || true
+          git push || true
