@@ -98,9 +98,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y upx-ucl
+          
+          # zig（CGO 交叉编译用，按需）
+          wget -q https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz
+          tar xf zig-linux-x86_64-0.11.0.tar.xz
+          sudo mv zig-linux-x86_64-0.11.0 /opt/zig
+          echo "/opt/zig" >> $GITHUB_PATH
+          
+          # po2lmo
           git clone --depth 1 https://github.com/openwrt/luci.git /tmp/luci
           make -C /tmp/luci/modules/luci-base/src po2lmo
           sudo cp /tmp/luci/modules/luci-base/src/po2lmo /usr/local/bin/
+          
           chmod +x .github/workflows/scripts/*.sh
 
       - name: 安装 Go
@@ -169,48 +178,63 @@ jobs:
             # 模块名
             name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | sed 's|/v[0-9]*$||' | xargs basename)
             [ -z "$name" ] && name="$proj"
-            main=""
+            
+            # 自动检测入口
             if [ -d "./cmd/$name" ]; then
               main="./cmd/$name"
-            elif [ -f "./cmd/main.go" ]; then
+            elif [ -d "./cmd" ] && find ./cmd -maxdepth 1 -name '*.go' | grep -q .; then
               main="./cmd"
-            elif [ -d "./cmd" ] && [ "$(ls ./cmd/*.go 2>/dev/null | wc -l)" -gt 0 ]; then
-              main="./cmd"
-            else
-              main="."
             fi
-            echo "📌 模块: $name, 入口: $main"
+            [ -z "$main" ] && main="."
+            
+            # 自动检测 CGO
+            CGO_NEEDED=0
+            if go list -f '{{join .CgoFiles " "}}' "$main" 2>/dev/null | grep -q '.'; then
+              CGO_NEEDED=1
+            fi
+            
+            echo "📌 模块: $name, 入口: $main, CGO: $CGO_NEEDED"
             
             declare -A GO_ARCHS=(
-              ["amd64"]=x86_64
-              ["arm64"]=aarch64
-              ["arm:7"]=armv7
-              ["arm:6"]=armv6
-              ["arm:5"]=armv5
-              ["386"]=i386
-              ["mips:softfloat"]=mips
-              ["mipsle:softfloat"]=mipsel
-              ["mips64"]=mips64
-              ["mips64le"]=mips64el
+              ["x86_64-linux-musl:amd64"]=x86_64
+              ["aarch64-linux-musl:arm64"]=aarch64
+              ["arm-linux-musleabihf:arm:7"]=armv7
+              ["arm-linux-musleabihf:arm:6"]=armv6
+              ["arm-linux-musleabihf:arm:5"]=armv5
+              ["i386-linux-musl:386"]=i386
+              ["mips-linux-musl:mips:softfloat"]=mips
+              ["mipsel-linux-musl:mipsle:softfloat"]=mipsel
+              ["mips64-linux-musl:mips64"]=mips64
+              ["mips64el-linux-musl:mips64le"]=mips64el
             )
             
             for spec in "${!GO_ARCHS[@]}"; do
               arch_name="${GO_ARCHS[$spec]}"
-              IFS=: read -r GOARCH GOARM_OR_MIPS <<< "$spec"
+              IFS=: read -r zig_target GOARCH GOARM_OR_MIPS <<< "$spec"
               
               pkg_name="${name}-linux-musl-${arch_name}"
               echo "🔨 Go: $pkg_name"
               mkdir -p "../bins/$pkg_name"
               
-              export GOOS=linux GOARCH CGO_ENABLED=0
-              unset GOARM GOMIPS
+              export GOOS=linux GOARCH
+              unset GOARM GOMIPS CC CXX
               
               case "$GOARCH" in
                 arm) export GOARM="${GOARM_OR_MIPS:-7}" ;;
                 mips|mipsle) export GOMIPS="${GOARM_OR_MIPS:-softfloat}" ;;
               esac
               
-              go build -trimpath -ldflags="-s -w" -o "../bins/$pkg_name/$name" "$main"
+              if [ "$CGO_NEEDED" = "1" ]; then
+                export CGO_ENABLED=1
+                export CC="zig cc -target $zig_target"
+                export CXX="zig c++ -target $zig_target"
+                LDFLAGS="-s -w -linkmode external -extldflags '-static'"
+              else
+                export CGO_ENABLED=0
+                LDFLAGS="-s -w"
+              fi
+              
+              go build -trimpath -ldflags="$LDFLAGS" -o "../bins/$pkg_name/$name" "$main"
               ls -lh "../bins/$pkg_name/$name"
             done
             cd ..
