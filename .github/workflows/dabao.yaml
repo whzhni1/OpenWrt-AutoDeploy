@@ -182,8 +182,8 @@ jobs:
             # 自动检测入口
             if [ -d "./cmd/$name" ]; then
               main="./cmd/$name"
-            elif [ -d "./cmd" ] && find ./cmd -maxdepth 1 -name '*.go' | grep -q .; then
-              main="./cmd"
+            elif [ -d "./cmd" ]; then
+              main=$(find ./cmd -maxdepth 2 -name "main.go" -exec dirname {} \; 2>/dev/null | head -1)
             fi
             [ -z "$main" ] && main="."
             
