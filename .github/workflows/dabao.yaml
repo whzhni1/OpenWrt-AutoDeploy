@@ -61,7 +61,7 @@ jobs:
               continue
             fi
             
-            # 检测类型：有 filter 就下载，否则检测语言
+            # 检测类型
             if [ -n "$FILTER" ]; then
               TYPE="bin"
             elif gh api "repos/$REPO/contents" --jq '.[].name' 2>/dev/null | grep -q 'go.mod'; then
@@ -240,13 +240,6 @@ jobs:
               find "$LUCI_DIR" -type f \( -name "*.lua" -o -name "*.js" -o -name "*.htm" -o -name "*.sh" -o -name "*init*" -o -name "*.conf" -o -name "*.json" \) \
                 -exec sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" {} \; 2>/dev/null || true
             fi
-            
-            # === 从 Makefile 提取依赖 ===
-            for mf in "$LUCI_DIR"/*/Makefile; do
-              [ -f "$mf" ] || continue
-              deps=$(grep -E '^\s*DEPENDS\s*:?=' "$mf" | grep -oE '\+[a-zA-Z0-9_-]+' | sed 's/^+//' | sort -u | tr '\n' ' ')
-              [ -n "$deps" ] && export PKG_DEPS="$deps" && echo "📦 依赖: $deps" && break
-            done
           fi
           
           # === 前端（仅 openlist） ===
@@ -260,7 +253,6 @@ jobs:
           
           # === 打包 ===
           export PKG_UPX="$(cfg_def upx true)"
-          export LUCI_DEPS="$(cfg_arr luci_deps)"
           
           .github/workflows/scripts/dabao.sh "$proj" "$LATEST" bins "$LUCI_DIR"
           
