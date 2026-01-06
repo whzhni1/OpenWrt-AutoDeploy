@@ -205,7 +205,7 @@ jobs:
                 mips|mipsle) export GOMIPS="$GOARM_OR_MIPS" ;;
               esac
               
-              go build -trimpath -ldflags="-s -w" -o "../bins/$pkg_name/$name" "./$main"
+              go build -o "../bins/$pkg_name/$name" "./$main"
               ls -lh "../bins/$pkg_name/$name"
             done
             cd ..
