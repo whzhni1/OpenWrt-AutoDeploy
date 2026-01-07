@@ -143,6 +143,7 @@ jobs:
           proj="${{ matrix.project }}"
           LATEST="${{ matrix.version }}"
           TYPE="${{ matrix.type }}"
+          VER="${LATEST#v}"
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📦 $proj $LATEST [$TYPE]"
@@ -166,7 +167,6 @@ jobs:
             
             # 前端（仅 openlist）
             if [ "$proj" = "openlist" ]; then
-              VER="${LATEST#v}"
               FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
               echo "📥 前端: $FRONTEND_URL"
               curl -sL "$FRONTEND_URL" -o frontend.tar.gz
@@ -176,11 +176,11 @@ jobs:
             fi
             
             # 模块名
-            MODULE=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}')
+            MODULE=$(grep '^module ' go.mod | awk '{print $2}')
             name=$(echo "$MODULE" | sed 's|/v[0-9]*$||' | xargs basename)
             [ -z "$name" ] && name="$proj"
             
-            # 入口（优先根目录 main.go）
+            # 入口
             main="."
             if [ ! -f "./main.go" ] && [ -d "./cmd" ]; then
               main=$(find ./cmd -maxdepth 1 -type d -iname "$name" | head -1)
@@ -188,116 +188,78 @@ jobs:
               [ -z "$main" ] && main="."
             fi
             
-            # 版本信息（仿照 Makefile GO_PKG_LDFLAGS）
+            echo "📌 模块: $name, 入口: $main"
+            
+            # 版本信息
             BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S %z')
             GO_VERSION=$(go version | sed 's/go version //')
             GIT_COMMIT="workflow/$(echo $GITHUB_SHA | cut -c1-7)"
             
-            LDFLAGS_BASE="-s -w"
             if [ "$proj" = "openlist" ]; then
-              LDFLAGS_BASE="$LDFLAGS_BASE \
+              LDFLAGS="-s -w \
                 -X '${MODULE}/internal/conf.BuiltAt=${BUILD_DATE}' \
                 -X '${MODULE}/internal/conf.GoVersion=${GO_VERSION}' \
                 -X '${MODULE}/internal/conf.GitAuthor=OpenList Contributors' \
                 -X '${MODULE}/internal/conf.GitCommit=${GIT_COMMIT}' \
                 -X '${MODULE}/internal/conf.Version=v${VER}' \
-                -X '${MODULE}/internal/conf.WebVersion=v${VER}'"
+                -X '${MODULE}/internal/conf.WebVersion=v${VER}' \
+                -linkmode external -extldflags '-static'"
+            else
+              LDFLAGS="-s -w"
             fi
             
-            echo "📌 模块: $name, 入口: $main"
-            
-            # 架构定义
-            # CGO 架构（zig 支持且浮点 ABI 兼容）
-            declare -A CGO_ARCHS=(
-              ["x86_64-linux-musl:amd64"]=x86_64
-              ["aarch64-linux-musl:arm64"]=aarch64
-              ["arm-linux-musleabihf:arm:7"]=armv7
-              ["i386-linux-musl:386"]=i386
-            )
-            
-            # 纯 Go 架构（无 CGO）
-            declare -A PURE_ARCHS=(
-              ["arm:6"]=armv6
-              ["arm:5"]=armv5
-              ["mips:softfloat"]=mips
-              ["mipsle:softfloat"]=mipsel
-              ["mips64"]=mips64
-              ["mips64le"]=mips64el
-            )
-            
-            # openlist 需要 CGO，只编译 CGO_ARCHS
+            # openlist CGO 编译（只编译 zig 支持的架构）
             if [ "$proj" = "openlist" ]; then
-              echo "🔧 openlist: CGO 模式，编译主流架构"
-              
-              for spec in "${!CGO_ARCHS[@]}"; do
-                arch_name="${CGO_ARCHS[$spec]}"
-                IFS=: read -r zig_target GOARCH GOARM_OR_MIPS <<< "$spec"
+              for arch in amd64 arm64 armv7; do
+                case "$arch" in
+                  amd64) zig_target="x86_64-linux-musl"; GOARCH=amd64 ;;
+                  arm64) zig_target="aarch64-linux-musl"; GOARCH=arm64 ;;
+                  armv7) zig_target="arm-linux-musleabihf"; GOARCH=arm; export GOARM=7 ;;
+                esac
                 
-                pkg_name="${name}-linux-musl-${arch_name}"
+                pkg_name="${name}-linux-musl-${arch}"
                 echo "🔨 Go CGO: $pkg_name"
                 mkdir -p "../bins/$pkg_name"
                 
                 export GOOS=linux GOARCH CGO_ENABLED=1
                 export CC="zig cc -target $zig_target"
                 export CXX="zig c++ -target $zig_target"
-                unset GOARM GOMIPS
                 
-                [ "$GOARCH" = "arm" ] && export GOARM="${GOARM_OR_MIPS:-7}"
-                
-                LDFLAGS="$LDFLAGS_BASE -linkmode external -extldflags '-static'"
-                
-                # 32位排除 lark 驱动（仿照 Makefile）
-                BUILD_TAGS=""
-                if [ "$GOARCH" != "amd64" ] && [ "$GOARCH" != "arm64" ]; then
-                  # 排除 lark 需要用 build tags 或者直接不处理
-                  :
+                if go build -trimpath -ldflags="$LDFLAGS" -o "../bins/$pkg_name/$name" "$main"; then
+                  ls -lh "../bins/$pkg_name/$name"
+                else
+                  echo "⚠️ $arch 编译失败，跳过"
+                  rm -rf "../bins/$pkg_name"
                 fi
                 
-                go build -trimpath -tags "$BUILD_TAGS" -ldflags="$LDFLAGS" -o "../bins/$pkg_name/$name" "$main"
-                ls -lh "../bins/$pkg_name/$name"
+                unset GOARM
               done
-              
             else
-              # 其他项目：纯 Go，编译所有架构
-              echo "🔧 纯 Go 模式，编译全部架构"
-              
-              # CGO 架构
-              for spec in "${!CGO_ARCHS[@]}"; do
-                arch_name="${CGO_ARCHS[$spec]}"
-                IFS=: read -r zig_target GOARCH GOARM_OR_MIPS <<< "$spec"
-                
-                pkg_name="${name}-linux-musl-${arch_name}"
-                echo "🔨 Go: $pkg_name"
-                mkdir -p "../bins/$pkg_name"
-                
-                export GOOS=linux GOARCH CGO_ENABLED=0
-                unset GOARM GOMIPS CC CXX
-                
-                [ "$GOARCH" = "arm" ] && export GOARM="${GOARM_OR_MIPS:-7}"
-                
-                go build -trimpath -ldflags="$LDFLAGS_BASE" -o "../bins/$pkg_name/$name" "$main"
-                ls -lh "../bins/$pkg_name/$name"
-              done
-              
-              # 纯 Go 架构
-              for spec in "${!PURE_ARCHS[@]}"; do
-                arch_name="${PURE_ARCHS[$spec]}"
-                IFS=: read -r GOARCH GOARM_OR_MIPS <<< "$spec"
-                
-                pkg_name="${name}-linux-musl-${arch_name}"
-                echo "🔨 Go: $pkg_name"
-                mkdir -p "../bins/$pkg_name"
-                
-                export GOOS=linux GOARCH CGO_ENABLED=0
-                unset GOARM GOMIPS CC CXX
+              # 纯 Go 编译
+              for spec in "amd64 " "arm64 " "arm 7" "arm 6" "arm 5" "386 " "mips softfloat" "mipsle softfloat" "mips64 " "mips64le "; do
+                read -r GOARCH extra <<< "$spec"
                 
                 case "$GOARCH" in
-                  arm) export GOARM="${GOARM_OR_MIPS:-7}" ;;
-                  mips|mipsle) export GOMIPS="${GOARM_OR_MIPS:-softfloat}" ;;
+                  arm) arch_name="armv${extra}"; export GOARM="$extra" ;;
+                  mips|mipsle) arch_name="$GOARCH"; export GOMIPS="$extra" ;;
+                  *) arch_name="$GOARCH" ;;
                 esac
                 
-                go build -trimpath -ldflags="$LDFLAGS_BASE" -o "../bins/$pkg_name/$name" "$main"
-                ls -lh "../bins/$pkg_name/$name"
+                pkg_name="${name}-linux-musl-${arch_name}"
+                echo "🔨 Go: $pkg_name"
+                mkdir -p "../bins/$pkg_name"
+                
+                export GOOS=linux GOARCH CGO_ENABLED=0
+                unset CC CXX
+                
+                if go build -trimpath -ldflags="$LDFLAGS" -o "../bins/$pkg_name/$name" "$main"; then
+                  ls -lh "../bins/$pkg_name/$name"
+                else
+                  echo "⚠️ $arch_name 编译失败，跳过"
+                  rm -rf "../bins/$pkg_name"
+                fi
+                
+                unset GOARM GOMIPS
               done
             fi
             cd ..
@@ -313,22 +275,18 @@ jobs:
             
             echo "📌 模块: $name"
             
-            declare -A RUST_ARCHS=(
-              [x86_64-unknown-linux-musl]=x86_64
-              [aarch64-unknown-linux-musl]=aarch64
-              [armv7-unknown-linux-musleabihf]=armv7
-              [arm-unknown-linux-musleabihf]=armv6
-              [i686-unknown-linux-musl]=i386
-            )
-            
-            for target in "${!RUST_ARCHS[@]}"; do
-              arch="${RUST_ARCHS[$target]}"
+            for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf arm-unknown-linux-musleabihf i686-unknown-linux-musl; do
+              arch="${target%%-*}"
               pkg_name="${name}-linux-musl-${arch}"
               echo "🔨 Rust: $pkg_name ($target)"
               mkdir -p "../bins/$pkg_name"
               
-              cargo build --release --target "$target"
-              find "target/$target/release" -maxdepth 1 -type f -executable ! -name "*.so" -exec cp {} "../bins/$pkg_name/" \;
+              if cargo build --release --target "$target"; then
+                find "target/$target/release" -maxdepth 1 -type f -executable ! -name "*.so" -exec cp {} "../bins/$pkg_name/" \;
+              else
+                echo "⚠️ $arch 编译失败，跳过"
+                rm -rf "../bins/$pkg_name"
+              fi
             done
             cd ..
           
