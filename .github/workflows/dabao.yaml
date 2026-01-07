@@ -99,7 +99,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y upx-ucl
           
-          # zig（CGO 交叉编译用，按需）
+          # zig（openlist CGO 编译用）
           wget -q https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz
           tar xf zig-linux-x86_64-0.11.0.tar.xz
           sudo mv zig-linux-x86_64-0.11.0 /opt/zig
@@ -162,39 +162,34 @@ jobs:
           if [ "$TYPE" = "go" ]; then
             echo "📥 Clone $REPO@$LATEST"
             git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
+            cd source
             
-            # 前端（仅 openlist）
+            # 前端（仅 openlist，在源码目录内）
             if [ "$proj" = "openlist" ]; then
               VER="${LATEST#v}"
               FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
               echo "📥 前端: $FRONTEND_URL"
               curl -sL "$FRONTEND_URL" -o frontend.tar.gz
               mkdir -p public/dist && tar xzf frontend.tar.gz -C public/dist --strip-components=1
+              rm frontend.tar.gz
               echo "📂 前端文件: $(find public/dist -type f | wc -l) 个"
             fi
-            
-            cd source
             
             # 模块名
             name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | sed 's|/v[0-9]*$||' | xargs basename)
             [ -z "$name" ] && name="$proj"
             
-            # 自动检测入口
-            if [ -d "./cmd/$name" ]; then
-              main="./cmd/$name"
-            elif [ -d "./cmd" ]; then
-              main=$(find ./cmd -maxdepth 2 -name "main.go" -exec dirname {} \; 2>/dev/null | head -1)
-            fi
-            [ -z "$main" ] && main="."
-            
-            # 自动检测 CGO
-            CGO_NEEDED=0
-            if go list -f '{{join .CgoFiles " "}}' "$main" 2>/dev/null | grep -q '.'; then
-              CGO_NEEDED=1
+            # 自动检测入口（优先根目录 main.go）
+            main="."
+            if [ ! -f "./main.go" ] && [ -d "./cmd" ]; then
+              main=$(find ./cmd -maxdepth 1 -type d -iname "$name" | head -1)
+              [ -z "$main" ] && main=$(find ./cmd -maxdepth 2 -name "main.go" -exec dirname {} \; 2>/dev/null | head -1)
+              [ -z "$main" ] && main="."
             fi
             
-            echo "📌 模块: $name, 入口: $main, CGO: $CGO_NEEDED"
+            echo "📌 模块: $name, 入口: $main"
             
+            # Go musl 架构 (zig_target:GOARCH:GOARM_OR_MIPS)
             declare -A GO_ARCHS=(
               ["x86_64-linux-musl:amd64"]=x86_64
               ["aarch64-linux-musl:arm64"]=aarch64
@@ -224,7 +219,8 @@ jobs:
                 mips|mipsle) export GOMIPS="${GOARM_OR_MIPS:-softfloat}" ;;
               esac
               
-              if [ "$CGO_NEEDED" = "1" ]; then
+              # openlist 需要 CGO 静态编译
+              if [ "$proj" = "openlist" ]; then
                 export CGO_ENABLED=1
                 export CC="zig cc -target $zig_target"
                 export CXX="zig c++ -target $zig_target"
@@ -315,11 +311,10 @@ jobs:
             
             if [ "${FIX_PATH:-true}" = "true" ]; then
               echo "🔧 修改路径: /etc/$proj → /etc/config/${proj}_data"
-              find "$LUCI_DIR" -type f \( \
-                -name "*.lua" -o -name "*.js" -o -name "*.htm" -o -name "*.html" \
-                -o -name "*.sh" -o -name "*init*" -o -name "*.conf" -o -name "*.json" \
-                -o -name "*.yaml" -o -name "*.yml" -o -name "Makefile" \
-              \) -exec sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" {} \; 2>/dev/null || true
+              # 用 file 判断文本文件，匹配所有
+              find "$LUCI_DIR" -type f | while read f; do
+                file -b "$f" | grep -qi text && sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" "$f" 2>/dev/null
+              done
             fi
           fi
           
