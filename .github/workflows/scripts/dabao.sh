@@ -14,7 +14,6 @@ mkdir -p "$OUT_DIR"
 
 # ========== Makefile 解析 ==========
 
-# 查找目录并确定项目名
 LUCI_APP_DIR="" ARCH_PKG_DIR="" PROJ_NAME="" PKG_DEPS=""
 if [ -d "$LUCI_SRC" ]; then
     LUCI_APP_DIR=$(find "$LUCI_SRC" -maxdepth 1 -type d -name "luci-app-*" | head -1)
@@ -39,8 +38,7 @@ get_deps() {
 get_bin_dst() {
     local makefile="$1"
     [ -f "$makefile" ] || return
-    local content=$(tr '\t' ' ' < "$makefile")
-    echo "$content" | grep -E 'INSTALL_BIN.*\$\((PKG_INSTALL_DIR|GO_PKG_BUILD_BIN_DIR|PKG_BUILD_DIR)\)' | \
+    tr '\t' ' ' < "$makefile" | grep -E 'INSTALL_BIN.*\$\((PKG_INSTALL_DIR|GO_PKG_BUILD_BIN_DIR|PKG_BUILD_DIR)\)' | \
         grep -oP '\$\(1\)\K/[^[:space:]]+' | head -1
 }
 
@@ -97,7 +95,11 @@ declare -A INSTALL_PERMS=([INSTALL_BIN]=755 [INSTALL_SBIN]=755 [INSTALL_CONF]=64
 
 parse_files() {
     local makefile="$1" data="$2" files_dir="$3"
-    [ -d "$files_dir" ] || return 0
+    
+    if [ ! -d "$files_dir" ]; then
+        echo "    ⚠️ files 目录不存在: $files_dir"
+        return 0
+    fi
     
     local mf_content=""
     [ -f "$makefile" ] && mf_content=$(sed ':a;N;$!ba;s/\\\n//g' "$makefile" | tr '\t' ' ')
@@ -107,7 +109,10 @@ parse_files() {
     for f in "$files_dir"/*; do
         [ -f "$f" ] || continue
         local name=$(basename "$f")
-        local line=$(echo "$mf_content" | grep -E "[^a-zA-Z0-9_]${name}[^a-zA-Z0-9_].*\\\$\(1\)" | head -1)
+        local src_size=$(stat -c%s "$f" 2>/dev/null || echo "0")
+        
+        # 在 Makefile 中查找该文件
+        local line=$(echo "$mf_content" | grep -E "(^|[^a-zA-Z0-9_])${name}([^a-zA-Z0-9_]|$).*\\\$\(1\)" | head -1)
         
         if [ -n "$line" ]; then
             local dst=$(echo "$line" | grep -oP '\$\(1\)\K/[^[:space:]]+')
@@ -119,18 +124,39 @@ parse_files() {
             done
             
             mkdir -p "$data$(dirname "$dst")"
-            cp "$f" "$data$dst"
+            cat "$f" > "$data$dst"  # 用 cat 替代 cp
             chmod $perm "$data$dst"
-            echo "    ✅ $name → $dst ($perm)"
+            echo "    ✅ $name → $dst ($perm, ${src_size}B)"
         else
+            # Fallback
             case "$name" in
-                *.init) mkdir -p "$data/etc/init.d"; cp "$f" "$data/etc/init.d/${name%.init}"; chmod 755 "$data/etc/init.d/${name%.init}" ;;
-                *.config) mkdir -p "$data/etc/config"; cp "$f" "$data/etc/config/${name%.config}" ;;
-                *.conf) mkdir -p "$data/etc/config"; cp "$f" "$data/etc/config/${name%.conf}" ;;
-                *.db|*.json|*.yaml|*.yml) mkdir -p "$data/etc/$PROJ_NAME"; cp "$f" "$data/etc/$PROJ_NAME/$name" ;;
-                *) mkdir -p "$data/etc"; cp "$f" "$data/etc/$name" ;;
+                *.init)
+                    mkdir -p "$data/etc/init.d"
+                    cat "$f" > "$data/etc/init.d/${name%.init}"
+                    chmod 755 "$data/etc/init.d/${name%.init}"
+                    echo "    ✅ $name → /etc/init.d/${name%.init} (755)"
+                    ;;
+                *.config)
+                    mkdir -p "$data/etc/config"
+                    cat "$f" > "$data/etc/config/${name%.config}"
+                    echo "    ✅ $name → /etc/config/${name%.config} (644)"
+                    ;;
+                *.conf)
+                    mkdir -p "$data/etc/config"
+                    cat "$f" > "$data/etc/config/${name%.conf}"
+                    echo "    ✅ $name → /etc/config/${name%.conf} (644)"
+                    ;;
+                *.db|*.json|*.yaml|*.yml)
+                    mkdir -p "$data/etc/$PROJ_NAME"
+                    cat "$f" > "$data/etc/$PROJ_NAME/$name"
+                    echo "    ✅ $name → /etc/$PROJ_NAME/$name (644)"
+                    ;;
+                *)
+                    mkdir -p "$data/etc"
+                    cat "$f" > "$data/etc/$name"
+                    echo "    ✅ $name → /etc/$name (644)"
+                    ;;
             esac
-            echo "    ✅ $name (fallback)"
         fi
     done
 }
@@ -144,12 +170,23 @@ build_arch_pkg() {
     rm -rf "$base_data" && mkdir -p "$base_data"
     
     echo "  🔧 架构包: $PROJ_NAME"
+    echo "  📂 ARCH_PKG_DIR: $ARCH_PKG_DIR"
     
     parse_files "$ARCH_PKG_DIR/Makefile" "$base_data" "$ARCH_PKG_DIR/files"
     
     # 合并 luci-app 的 init.d 和 config
-    [ -d "$LUCI_APP_DIR/root/etc/init.d" ] && mkdir -p "$base_data/etc/init.d" && cp -a "$LUCI_APP_DIR/root/etc/init.d/"* "$base_data/etc/init.d/" 2>/dev/null || true
-    [ -d "$LUCI_APP_DIR/root/etc/config" ] && mkdir -p "$base_data/etc/config" && cp -a "$LUCI_APP_DIR/root/etc/config/"* "$base_data/etc/config/" 2>/dev/null || true
+    if [ -d "$LUCI_APP_DIR/root/etc/init.d" ]; then
+        mkdir -p "$base_data/etc/init.d"
+        for f in "$LUCI_APP_DIR/root/etc/init.d"/*; do
+            [ -f "$f" ] && cat "$f" > "$base_data/etc/init.d/$(basename "$f")"
+        done
+    fi
+    if [ -d "$LUCI_APP_DIR/root/etc/config" ]; then
+        mkdir -p "$base_data/etc/config"
+        for f in "$LUCI_APP_DIR/root/etc/config"/*; do
+            [ -f "$f" ] && cat "$f" > "$base_data/etc/config/$(basename "$f")"
+        done
+    fi
     
     local bin_dst=$(get_bin_dst "$ARCH_PKG_DIR/Makefile")
     [ -z "$bin_dst" ] && bin_dst="/usr/bin/$PROJ_NAME"
@@ -158,6 +195,8 @@ build_arch_pkg() {
     
     echo "  📌 二进制: $bin_name → $bin_dst"
     echo "  📌 init: ${init_name:-无}"
+    echo "  📂 base_data 内容:"
+    find "$base_data" -type f -exec ls -la {} \; 2>/dev/null | head -20
     
     local deps="libc${PKG_DEPS:+, $PKG_DEPS}"
     
@@ -173,10 +212,13 @@ build_arch_pkg() {
         local data="$TEMP_DIR/arch_${arch_name}_$$"
         local ctrl="$TEMP_DIR/arch_ctrl_$$"
         
+        rm -rf "$data" "$ctrl"
         cp -a "$base_data" "$data"
-        rm -rf "$ctrl" && mkdir -p "$ctrl" "$data$(dirname "$bin_dst")"
+        mkdir -p "$ctrl" "$data$(dirname "$bin_dst")"
+        
         do_upx "$bin"
-        cp "$bin" "$data$bin_dst" && chmod 755 "$data$bin_dst"
+        cat "$bin" > "$data$bin_dst"
+        chmod 755 "$data$bin_dst"
         fix_perms "$data"
         
         [ -d "$data/etc/config" ] && find "$data/etc/config" -type f 2>/dev/null | sed "s|^$data||" > "$ctrl/conffiles"
@@ -227,7 +269,6 @@ build_luci() {
     local luci_ver=$(get_luci_version); [ -z "$luci_ver" ] && luci_ver="$PKG_VERSION"
     local data="$TEMP_DIR/luci_data_$$" ctrl="$TEMP_DIR/luci_ctrl_$$"
     
-    # 提取 LuCI 依赖
     local luci_deps=$(get_deps "$LUCI_APP_DIR/Makefile")
     
     echo "  🔧 LuCI: $luci_name (v$luci_ver)"
@@ -308,7 +349,8 @@ pack_simple_bin() {
         rm -rf "$data" "$ctrl" && mkdir -p "$data/usr/bin" "$ctrl"
         
         do_upx "$bin"
-        cp "$bin" "$data/usr/bin/$PKG_NAME" && chmod 755 "$data/usr/bin/$PKG_NAME"
+        cat "$bin" > "$data/usr/bin/$PKG_NAME"
+        chmod 755 "$data/usr/bin/$PKG_NAME"
         
         write_control "$ctrl" "$PKG_NAME" "$PKG_VERSION" "libc" "$PKG_NAME" "$data"
         
