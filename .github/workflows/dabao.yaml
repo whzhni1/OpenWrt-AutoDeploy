@@ -169,8 +169,8 @@ jobs:
               FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
               echo "📥 前端: $FRONTEND_URL"
               curl -sL "$FRONTEND_URL" -o frontend.tar.gz
-              mkdir -p source/public/dist && tar xzf frontend.tar.gz -C source/public/dist --strip-components=1
-              echo "📂 前端文件: $(find source/public/dist -type f | wc -l) 个"
+              mkdir -p public/dist && tar xzf frontend.tar.gz -C public/dist --strip-components=1
+              echo "📂 前端文件: $(find public/dist -type f | wc -l) 个"
             fi
             
             cd source
@@ -185,7 +185,7 @@ jobs:
             elif [ -d "./cmd" ]; then
               main=$(find ./cmd -maxdepth 2 -name "main.go" -exec dirname {} \; 2>/dev/null | head -1)
             fi
-            [ -z "$main" ] && main="./cmd"
+            [ -z "$main" ] && main="."
             
             # 自动检测 CGO
             CGO_NEEDED=0
