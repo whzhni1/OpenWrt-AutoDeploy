@@ -99,7 +99,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y upx-ucl
           
-          # zig（openlist CGO 编译用）
+          # zig
           wget -q https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz
           tar xf zig-linux-x86_64-0.11.0.tar.xz
           sudo mv zig-linux-x86_64-0.11.0 /opt/zig
@@ -164,7 +164,7 @@ jobs:
             git clone --depth 1 --branch "$LATEST" "https://github.com/$REPO.git" source
             cd source
             
-            # 前端（仅 openlist，在源码目录内）
+            # 前端（仅 openlist）
             if [ "$proj" = "openlist" ]; then
               VER="${LATEST#v}"
               FRONTEND_URL="https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v${VER}/openlist-frontend-dist-lite-v${VER}.tar.gz"
@@ -176,10 +176,11 @@ jobs:
             fi
             
             # 模块名
-            name=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}' | sed 's|/v[0-9]*$||' | xargs basename)
+            MODULE=$(grep '^module ' go.mod 2>/dev/null | awk '{print $2}')
+            name=$(echo "$MODULE" | sed 's|/v[0-9]*$||' | xargs basename)
             [ -z "$name" ] && name="$proj"
             
-            # 自动检测入口（优先根目录 main.go）
+            # 入口（优先根目录 main.go）
             main="."
             if [ ! -f "./main.go" ] && [ -d "./cmd" ]; then
               main=$(find ./cmd -maxdepth 1 -type d -iname "$name" | head -1)
@@ -187,52 +188,118 @@ jobs:
               [ -z "$main" ] && main="."
             fi
             
+            # 版本信息（仿照 Makefile GO_PKG_LDFLAGS）
+            BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S %z')
+            GO_VERSION=$(go version | sed 's/go version //')
+            GIT_COMMIT="workflow/$(echo $GITHUB_SHA | cut -c1-7)"
+            
+            LDFLAGS_BASE="-s -w"
+            if [ "$proj" = "openlist" ]; then
+              LDFLAGS_BASE="$LDFLAGS_BASE \
+                -X '${MODULE}/internal/conf.BuiltAt=${BUILD_DATE}' \
+                -X '${MODULE}/internal/conf.GoVersion=${GO_VERSION}' \
+                -X '${MODULE}/internal/conf.GitAuthor=OpenList Contributors' \
+                -X '${MODULE}/internal/conf.GitCommit=${GIT_COMMIT}' \
+                -X '${MODULE}/internal/conf.Version=v${VER}' \
+                -X '${MODULE}/internal/conf.WebVersion=v${VER}'"
+            fi
+            
             echo "📌 模块: $name, 入口: $main"
             
-            # Go musl 架构 (zig_target:GOARCH:GOARM_OR_MIPS)
-            declare -A GO_ARCHS=(
+            # 架构定义
+            # CGO 架构（zig 支持且浮点 ABI 兼容）
+            declare -A CGO_ARCHS=(
               ["x86_64-linux-musl:amd64"]=x86_64
               ["aarch64-linux-musl:arm64"]=aarch64
               ["arm-linux-musleabihf:arm:7"]=armv7
-              ["arm-linux-musleabihf:arm:6"]=armv6
-              ["arm-linux-musleabihf:arm:5"]=armv5
               ["i386-linux-musl:386"]=i386
-              ["mips-linux-musl:mips:softfloat"]=mips
-              ["mipsel-linux-musl:mipsle:softfloat"]=mipsel
-              ["mips64-linux-musl:mips64"]=mips64
-              ["mips64el-linux-musl:mips64le"]=mips64el
             )
             
-            for spec in "${!GO_ARCHS[@]}"; do
-              arch_name="${GO_ARCHS[$spec]}"
-              IFS=: read -r zig_target GOARCH GOARM_OR_MIPS <<< "$spec"
+            # 纯 Go 架构（无 CGO）
+            declare -A PURE_ARCHS=(
+              ["arm:6"]=armv6
+              ["arm:5"]=armv5
+              ["mips:softfloat"]=mips
+              ["mipsle:softfloat"]=mipsel
+              ["mips64"]=mips64
+              ["mips64le"]=mips64el
+            )
+            
+            # openlist 需要 CGO，只编译 CGO_ARCHS
+            if [ "$proj" = "openlist" ]; then
+              echo "🔧 openlist: CGO 模式，编译主流架构"
               
-              pkg_name="${name}-linux-musl-${arch_name}"
-              echo "🔨 Go: $pkg_name"
-              mkdir -p "../bins/$pkg_name"
-              
-              export GOOS=linux GOARCH
-              unset GOARM GOMIPS CC CXX
-              
-              case "$GOARCH" in
-                arm) export GOARM="${GOARM_OR_MIPS:-7}" ;;
-                mips|mipsle) export GOMIPS="${GOARM_OR_MIPS:-softfloat}" ;;
-              esac
-              
-              # openlist 需要 CGO 静态编译
-              if [ "$proj" = "openlist" ]; then
-                export CGO_ENABLED=1
+              for spec in "${!CGO_ARCHS[@]}"; do
+                arch_name="${CGO_ARCHS[$spec]}"
+                IFS=: read -r zig_target GOARCH GOARM_OR_MIPS <<< "$spec"
+                
+                pkg_name="${name}-linux-musl-${arch_name}"
+                echo "🔨 Go CGO: $pkg_name"
+                mkdir -p "../bins/$pkg_name"
+                
+                export GOOS=linux GOARCH CGO_ENABLED=1
                 export CC="zig cc -target $zig_target"
                 export CXX="zig c++ -target $zig_target"
-                LDFLAGS="-s -w -linkmode external -extldflags '-static'"
-              else
-                export CGO_ENABLED=0
-                LDFLAGS="-s -w"
-              fi
+                unset GOARM GOMIPS
+                
+                [ "$GOARCH" = "arm" ] && export GOARM="${GOARM_OR_MIPS:-7}"
+                
+                LDFLAGS="$LDFLAGS_BASE -linkmode external -extldflags '-static'"
+                
+                # 32位排除 lark 驱动（仿照 Makefile）
+                BUILD_TAGS=""
+                if [ "$GOARCH" != "amd64" ] && [ "$GOARCH" != "arm64" ]; then
+                  # 排除 lark 需要用 build tags 或者直接不处理
+                  :
+                fi
+                
+                go build -trimpath -tags "$BUILD_TAGS" -ldflags="$LDFLAGS" -o "../bins/$pkg_name/$name" "$main"
+                ls -lh "../bins/$pkg_name/$name"
+              done
               
-              go build -trimpath -ldflags="$LDFLAGS" -o "../bins/$pkg_name/$name" "$main"
-              ls -lh "../bins/$pkg_name/$name"
-            done
+            else
+              # 其他项目：纯 Go，编译所有架构
+              echo "🔧 纯 Go 模式，编译全部架构"
+              
+              # CGO 架构
+              for spec in "${!CGO_ARCHS[@]}"; do
+                arch_name="${CGO_ARCHS[$spec]}"
+                IFS=: read -r zig_target GOARCH GOARM_OR_MIPS <<< "$spec"
+                
+                pkg_name="${name}-linux-musl-${arch_name}"
+                echo "🔨 Go: $pkg_name"
+                mkdir -p "../bins/$pkg_name"
+                
+                export GOOS=linux GOARCH CGO_ENABLED=0
+                unset GOARM GOMIPS CC CXX
+                
+                [ "$GOARCH" = "arm" ] && export GOARM="${GOARM_OR_MIPS:-7}"
+                
+                go build -trimpath -ldflags="$LDFLAGS_BASE" -o "../bins/$pkg_name/$name" "$main"
+                ls -lh "../bins/$pkg_name/$name"
+              done
+              
+              # 纯 Go 架构
+              for spec in "${!PURE_ARCHS[@]}"; do
+                arch_name="${PURE_ARCHS[$spec]}"
+                IFS=: read -r GOARCH GOARM_OR_MIPS <<< "$spec"
+                
+                pkg_name="${name}-linux-musl-${arch_name}"
+                echo "🔨 Go: $pkg_name"
+                mkdir -p "../bins/$pkg_name"
+                
+                export GOOS=linux GOARCH CGO_ENABLED=0
+                unset GOARM GOMIPS CC CXX
+                
+                case "$GOARCH" in
+                  arm) export GOARM="${GOARM_OR_MIPS:-7}" ;;
+                  mips|mipsle) export GOMIPS="${GOARM_OR_MIPS:-softfloat}" ;;
+                esac
+                
+                go build -trimpath -ldflags="$LDFLAGS_BASE" -o "../bins/$pkg_name/$name" "$main"
+                ls -lh "../bins/$pkg_name/$name"
+              done
+            fi
             cd ..
           
           # === Rust 编译 ===
@@ -311,7 +378,6 @@ jobs:
             
             if [ "${FIX_PATH:-true}" = "true" ]; then
               echo "🔧 修改路径: /etc/$proj → /etc/config/${proj}_data"
-              # 用 file 判断文本文件，匹配所有
               find "$LUCI_DIR" -type f | while read f; do
                 file -b "$f" | grep -qi text && sed -i "s|/etc/$proj|/etc/config/${proj}_data|g" "$f" 2>/dev/null
               done
