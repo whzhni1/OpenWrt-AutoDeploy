@@ -185,7 +185,7 @@ jobs:
             elif [ -d "./cmd" ]; then
               main=$(find ./cmd -maxdepth 2 -name "main.go" -exec dirname {} \; 2>/dev/null | head -1)
             fi
-            [ -z "$main" ] && main="."
+            [ -z "$main" ] && main="./cmd/OpenList"
             
             # 自动检测 CGO
             CGO_NEEDED=0
