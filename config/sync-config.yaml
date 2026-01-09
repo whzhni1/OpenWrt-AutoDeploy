@@ -25,6 +25,7 @@ repositories:
   - github_owner: whzhni1
     github_repo: luci-app-tailscale
     local_name: tailscale
+    platforms: gitlab r2
 
   - github_owner: whzhni1
     github_repo: luci-app-lucky
