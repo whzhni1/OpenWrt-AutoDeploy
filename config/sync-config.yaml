@@ -33,13 +33,13 @@ repositories:
   - github_owner: eamonxg
     github_repo: luci-theme-aurora
 
-  - github_owner: xiaorouji
+  - github_owner: Openwrt-Passwall
     github_repo: openwrt-passwall
     local_name: luci-app-passwall
     filter_exclude: luci-19.07* *.zip
     platforms: gitlab r2
 
-  - github_owner: xiaorouji
+  - github_owner: Openwrt-Passwall
     github_repo: openwrt-passwall2
     local_name: luci-app-passwall2
     filter_exclude: luci-19.07* *.zip
