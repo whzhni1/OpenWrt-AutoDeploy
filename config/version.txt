@@ -1,7 +1,7 @@
 
 luci-app-openclash|v0.47.046
 luci-app-passwall2|v26.1.1-1
-luci-app-passwall|v26.1.9-1
+luci-app-passwall|v26.1.13-1
 luci-theme-aurora|v0.9.0_beta
 lucky|v2.25.3
 openlist2|v4.1.9
