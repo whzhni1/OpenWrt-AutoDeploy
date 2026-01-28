@@ -1,11 +1,11 @@
 
 luci-app-openclash|v0.47.046
 luci-app-passwall2|v26.1.27-1
-luci-app-passwall|vdev-26.1.26
+luci-app-passwall|vdev-26.1.29
 luci-theme-aurora|v0.10.0
 lucky|v2.26.2
 openlist2|v4.1.9
 openlist|v4.1.9
-tailscale|v1.92.5
+tailscale|v1.94.1
 vnts|v1.2.12
 vnt|v1.2.16
