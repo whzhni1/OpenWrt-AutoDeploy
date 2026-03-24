@@ -8,4 +8,4 @@ openlist2|v4.1.10
 openlist|v4.1.10
 tailscale|v1.96.3
 vnts|v1.2.12
-vnt|v1.2.16
+vnt|1.2.16
