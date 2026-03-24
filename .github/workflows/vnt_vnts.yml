@@ -2,7 +2,7 @@ name: 构建 VNT / VNTS
 
 on:
   #schedule:
-   # - cron: '0 17 * * *'
+  #  - cron: '0 17 * * *'
   workflow_dispatch:
     inputs:
       force_build:
@@ -23,17 +23,16 @@ jobs:
         run: |
           wget -qO /tmp/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /tmp/yq
           echo "defaults=$(/tmp/yq '.defaults' config/sync-config.yaml -o=json -I=0)" >> $GITHUB_OUTPUT
-          
           UPDATES='[]'
           for name in vnt vnts; do
             ver=$(curl -s "https://api.github.com/repos/vnt-dev/$name/releases/latest" | jq -r '.tag_name|ltrimstr("v")')
             [ -z "$ver" ] && continue
             local=$(bash .github/workflows/scripts/version-manager.sh read "$name" 2>/dev/null || echo "")
             if [ "$local" != "$ver" ] || [ "${{ inputs.force_build }}" = "true" ]; then
+              # 仅在 name 为 vnt 时启用 luci 构建标识
               UPDATES=$(echo "$UPDATES" | jq -c --arg n "$name" --arg v "$ver" '. += [{name:$n,version:$v,luci:($n=="vnt")}]')
             fi
           done
-          
           [ "$UPDATES" = "[]" ] && echo "has_updates=false" >> $GITHUB_OUTPUT || echo "has_updates=true" >> $GITHUB_OUTPUT
           echo "matrix={\"include\":$UPDATES}" >> $GITHUB_OUTPUT
 
@@ -52,83 +51,59 @@ jobs:
           VER="${{ matrix.version }}"
           mkdir -p out
 
-          targets() {
-            case $1 in
-              aarch64) echo aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic;;
-              arm)     echo arm_arm1176jzf-s_vfp arm_fa526 arm_mpcore arm_xscale;;
-              armv7)   echo arm_cortex-a5_vfpv4 arm_cortex-a7 arm_cortex-a7_neon-vfpv4 arm_cortex-a7_vfpv4 arm_cortex-a8_vfpv3 arm_cortex-a9 arm_cortex-a9_neon arm_cortex-a9_vfpv3-d16 arm_cortex-a15_neon-vfpv4;;
-              x86_64)  echo x86_64;;
-              i686)    echo i386_pentium-mmx i386_pentium4;;
-              mips)    echo mips_24kc mips_mips32;;
-              mipsel)  echo mipsel_24kc mipsel_24kc_24kf mipsel_74kc mipsel_mips32;;
-            esac
-          }
-
-          mkpkg() {
-            local pkg="$1" ver="$2" arch="$3" dir="$4" deps="$5"
-            local size=$(du -sb "$dir" | cut -f1)
+          # -----------------------------------------------------------
+          # 第一部分：下载 VNT/VNTS 官方压缩包
+          # -----------------------------------------------------------
+          API_URL="https://api.github.com/repos/vnt-dev/$NAME/releases/latest"
+          ASSETS=$(curl -s "$API_URL" | jq -r '.assets[] | @base64')
+          
+          for asset_enc in $ASSETS; do
+            asset=$(echo "$asset_enc" | base64 -d)
+            filename=$(echo "$asset" | jq -r '.name')
+            download_url=$(echo "$asset" | jq -r '.browser_download_url')
             
-            mkdir -p "$dir/CONTROL"
-            printf 'Package: %s\nVersion: %s\nArchitecture: %s\nInstalled-Size: %s\nDescription: %s for OpenWrt\n' \
-              "$pkg" "$ver" "$arch" "$size" "$pkg" > "$dir/CONTROL/control"
-            [ -n "$deps" ] && echo "Depends: $deps" >> "$dir/CONTROL/control"
-            echo '2.0' > debian-binary
-            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf control.tar.gz -C "$dir/CONTROL" .
-            local data_dirs=$(find "$dir" -maxdepth 1 -type d ! -name CONTROL ! -name "$(basename $dir)" -printf './%f ')
-            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C "$dir" $data_dirs
-            tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "out/${pkg}_${ver}_${arch}.ipk" ./control.tar.gz ./data.tar.gz ./debian-binary
-            rm -rf "$dir/CONTROL"
-            printf 'pkgname = %s\npkgver = %s\npkgdesc = %s for OpenWrt\narch = %s\nsize = %s\n' \
-              "$pkg" "$ver" "$pkg" "$arch" "$size" > "$dir/.PKGINFO"
-            [ -n "$deps" ] && echo "depend = $deps" >> "$dir/.PKGINFO"
-            tar -czf "out/${pkg}-${ver}.${arch}.apk" -C "$dir" .
-            rm -f control.tar.gz data.tar.gz debian-binary
-          }
-
-          for asset in $(curl -s "https://api.github.com/repos/vnt-dev/$NAME/releases/latest" | jq -r '.assets[].name'); do
-            case $asset in *-unknown-linux-musl*.tar.gz) ;; *) continue;; esac
-            arch=$(echo "$asset" | cut -d- -f2)
-            tgts=$(targets "$arch")
-            [ -z "$tgts" ] && continue
-            
-            echo "📦 $asset"
-            wget -q "https://github.com/vnt-dev/$NAME/releases/download/v$VER/$asset" -O dl.tar.gz || continue
-            rm -rf bin && mkdir bin && tar -xf dl.tar.gz -C bin
-            
-            for t in $tgts; do
-              rm -rf pkg && mkdir -p pkg/usr/bin
-              [ "$NAME" = "vnt" ] && find bin -type f -name "vnt-cli" -exec cp {} pkg/usr/bin/vnt-cli \;
-              [ "$NAME" = "vnts" ] && find bin -type f -name "vnts" -exec cp {} pkg/usr/bin/vnts \;
-              chmod +x pkg/usr/bin/*
-              mkpkg "$NAME" "$VER" "$t" "pkg" ""
-              echo "  ✅ $t"
-            done
-            rm -rf bin dl.tar.gz
+            # 筛选压缩包，排除源码
+            if [[ "$filename" == *.tar.gz ]] || [[ "$filename" == *.zip ]]; then
+              if [[ "$filename" != *"source"* ]]; then
+                 echo "📥 正在下载: $filename"
+                 wget -q "$download_url" -O "out/$filename"
+                 echo " ✅ 已保存到 out/$filename"
+              fi
+            fi
           done
 
-          # 打包 LuCI
+          # -----------------------------------------------------------
+          # 第二部分：构建 LuCI (仅当 matrix.luci 为 true 时执行)
+          # -----------------------------------------------------------
           if [ "${{ matrix.luci }}" = "true" ]; then
-            echo "📦 luci-app-vnt"
+            echo "📦 开始构建 luci-app-vnt"
             git clone --depth=1 https://github.com/lmq8267/luci-app-vnt src
             luci_ver=$(grep -oP 'PKG_VERSION:=\K.*' src/luci-app-vnt/Makefile | head -1)
             
             rm -rf pkg && mkdir -p pkg/CONTROL
+            
+            # 拷贝 LuCI 文件
             [ -d src/luci-app-vnt/luasrc ] && mkdir -p pkg/usr/lib/lua/luci && cp -R src/luci-app-vnt/luasrc/* pkg/usr/lib/lua/luci/
             [ -d src/luci-app-vnt/htdocs ] && mkdir -p pkg/www && cp -R src/luci-app-vnt/htdocs/* pkg/www/
             [ -d src/luci-app-vnt/root ] && cp -R src/luci-app-vnt/root/* pkg/
-            
             find pkg/etc/init.d -type f -exec chmod +x {} \; 2>/dev/null || true
+            
             size=$(du -sb pkg | cut -f1)
+            
+            # 定义脚本内容
             POSTINST='#!/bin/sh
             rm -rf /tmp/luci-*
             [ -f /etc/uci-defaults/luci-vnt ] && sh /etc/uci-defaults/luci-vnt && rm -f /etc/uci-defaults/luci-vnt
             [ -x /etc/init.d/vnt ] && /etc/init.d/vnt enable
             ( sleep 2 && /etc/init.d/vnt restart && /etc/init.d/uhttpd restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null ) &
             exit 0'
-            PRERM='#!/bin/sh
-            [ "$PKG_UPGRADE" = "1" ] || exit 0
-            /etc/init.d/vnt stop 2>/dev/null || true
-            exit 0'
+            
+             PRERM='#!/bin/sh
+              [ "$PKG_UPGRADE" = "1" ] || exit 0
+              /etc/init.d/vnt stop 2>/dev/null || true
+             exit 0'
+            
+            # 生成 IPK 包
             printf 'Package: luci-app-vnt\nVersion: %s\nArchitecture: all\nInstalled-Size: %s\nDepends: vnt\nDescription: LuCI support for VNT\n' \
               "$luci_ver" "$size" > pkg/CONTROL/control
             echo "/etc/config/vnt" > pkg/CONTROL/conffiles
@@ -140,6 +115,8 @@ jobs:
             data_dirs=$(find pkg -maxdepth 1 -type d ! -name CONTROL ! -name pkg -printf './%f ')
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf data.tar.gz -C pkg $data_dirs
             tar --format=gnu --numeric-owner --group=0 --owner=0 -czf "out/luci-app-vnt_${luci_ver}_all.ipk" ./control.tar.gz ./data.tar.gz ./debian-binary
+            
+            # 生成 APK 包 (用于新版 OpenWrt)
             rm -rf pkg/CONTROL
             printf 'pkgname = luci-app-vnt\npkgver = %s\npkgdesc = LuCI support for VNT\narch = all\nsize = %s\ndepend = vnt\n' \
               "$luci_ver" "$size" > pkg/.PKGINFO
@@ -147,8 +124,9 @@ jobs:
             echo "$PRERM" > pkg/.pre-deinstall && chmod +x pkg/.pre-deinstall
             tar -czf "out/luci-app-vnt-${luci_ver}.all.apk" -C pkg .
             
+            # 清理临时文件
             rm -rf src pkg control.tar.gz data.tar.gz debian-binary
-            echo "  ✅ luci-app-vnt"
+            echo " ✅ luci-app-vnt 构建完成"
           fi
 
       - uses: actions/upload-artifact@v4
@@ -168,12 +146,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: files
-
       - name: 发布
         env:
           USERNAME: ${{ fromJSON(needs.check.outputs.defaults).username }}
@@ -193,7 +169,6 @@ jobs:
           export UPLOAD_FILES="$(find files -type f | tr '\n' ' ')"
           export RELEASE_BODY="## 📦 ${{ matrix.name }} ${{ matrix.version }}"
           bash .github/workflows/scripts/release.sh
-
       - name: 更新版本
         run: |
           git config user.name "github-actions[bot]"
