@@ -25,9 +25,9 @@ projects:
     source_repo: OpenListTeam/openlist
     luci_repo: sbwml/luci-app-openlist2
 
-  vnt:
-    source_repo: vnt-dev/vnt
-    luci_repo: lmq8267/luci-app-vnt
+  #vnt:
+    #source_repo: vnt-dev/vnt
+  #  luci_repo: lmq8267/luci-app-vnt
 
-  vnts:
-    source_repo: vnt-dev/vnts
+  #vnts:
+  #  source_repo: vnt-dev/vnts
