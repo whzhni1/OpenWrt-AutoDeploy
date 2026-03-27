@@ -18,7 +18,7 @@ jobs:
       has_updates: ${{ steps.check.outputs.has_updates }}
       defaults: ${{ steps.check.outputs.defaults }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: check
         run: |
           wget -qO /tmp/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && chmod +x /tmp/yq
@@ -129,7 +129,7 @@ jobs:
             echo " ✅ luci-app-vnt 构建完成"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.name }}
           path: out/*
@@ -143,10 +143,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.check.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: ${{ matrix.name }}
           path: files
