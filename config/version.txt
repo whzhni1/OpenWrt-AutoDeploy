@@ -5,7 +5,7 @@ luci-app-passwall|v26.4.6-1
 luci-theme-aurora|v0.11.0
 lucky|v2.27.2
 openlist2|v4.1.10
-openlist|v4.1.10
+openlist|v4.2.0
 tailscale|v1.96.4
 vnts|1.2.12
 vnt|1.2.16
