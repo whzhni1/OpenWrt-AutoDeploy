@@ -46,3 +46,6 @@ repositories:
     filter_exclude: luci-19.07* *.zip
     platforms: gitlab r2
     
+
+  - github_owner: whzhni1
+    github_repo: luci-app-vnt2
