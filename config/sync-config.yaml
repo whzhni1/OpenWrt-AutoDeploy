@@ -8,6 +8,7 @@
 # - filter_exclude: 排除文件规则，空格分隔（选填）
 # - filter_include: 包含文件规则，格式：pattern:数量（选填）
 # - filter_by_version: 是否只保留版本号匹配的文件（选填，默认 false）
+# -prerelease: true 获取测试版（第一个release）
 
 # 🌐 全局默认配置
 defaults:
@@ -53,7 +54,9 @@ repositories:
   - github_owner: vnt-dev
     github_repo: vnt
     platforms: gitlab gitee
+    prerelease: true
     
   - github_owner: vnt-dev
     github_repo: vnts
     platforms: gitlab gitee
+    prerelease: true
