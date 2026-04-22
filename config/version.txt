@@ -8,5 +8,5 @@ lucky|v2.27.2
 openlist2|v4.2.1
 openlist|v4.2.1
 tailscale|v1.96.4
-vnts|v2.0.0
+vnts|v1.2.12
 vnt|v2.0.0
