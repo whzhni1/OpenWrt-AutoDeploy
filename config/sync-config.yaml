@@ -45,7 +45,15 @@ repositories:
     local_name: luci-app-passwall2
     filter_exclude: luci-19.07* *.zip
     platforms: gitlab r2
-    
 
   - github_owner: whzhni1
     github_repo: luci-app-vnt2
+    platforms: gitlab gitee
+    
+  - github_owner: vnt-dev
+    github_repo: vnt
+    platforms: gitlab gitee
+    
+  - github_owner: vnt-dev
+    github_repo: vnts
+    platforms: gitlab gitee
