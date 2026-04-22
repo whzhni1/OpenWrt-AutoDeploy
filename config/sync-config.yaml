@@ -53,10 +53,10 @@ repositories:
     
   - github_owner: vnt-dev
     github_repo: vnt
-    platforms: gitlab gitee
+    platforms: gitlab gitee r2
     prerelease: true
     
   - github_owner: vnt-dev
     github_repo: vnts
-    platforms: gitlab gitee
+    platforms: gitlab gitee r2
     prerelease: true
