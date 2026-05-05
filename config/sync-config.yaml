@@ -49,7 +49,7 @@ repositories:
 
   - github_owner: whzhni1
     github_repo: luci-app-vnt2
-    platforms: gitlab gitee
+    platforms: gitlab gitee r2
     
   - github_owner: vnt-dev
     github_repo: vnt
