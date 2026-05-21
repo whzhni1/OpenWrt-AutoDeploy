@@ -23,11 +23,21 @@ if [ -z "$RELEASE_TITLE" ]; then
 fi
 
 if [ -z "$RELEASE_BODY" ]; then
+    sha256_section=""
+    if [ -f "${DOWNLOAD_DIR}/sha256.txt" ]; then
+        sha256_section="
+
+### 🔐 文件校验
+\`\`\`
+$(cat "${DOWNLOAD_DIR}/sha256.txt")
+\`\`\`"
+    fi
+
     export RELEASE_BODY="## 📦 ${REPO_NAME} ${TAG_NAME}
 
 ### 📌 上游信息
 - 项目: ${GITHUB_REPO_URL:-unknown}
-- 同步时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+- 同步时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')${sha256_section}"
 fi
 
 # 导出其他必需变量
