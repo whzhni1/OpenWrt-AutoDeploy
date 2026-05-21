@@ -96,7 +96,8 @@ upload_files() {
     --arg tag "$TAG_NAME" \
     --argjson count "$uploaded" \
     --argjson assets "$assets" \
-    '[{tag_name:$tag, assets:{count:$count, files:$assets}}]' > /tmp/releases
+    --arg sha256 "$(cat "${DOWNLOAD_DIR}/sha256.txt" 2>/dev/null || echo "")" \
+    '[{tag_name:$tag, assets:{count:$count, files:$assets}, sha256:$sha256}]' > /tmp/releases
     
     aws s3 cp /tmp/releases "s3://$R2_BUCKET/$REPO_NAME/releases" \
         --endpoint-url="$R2_ENDPOINT" \
