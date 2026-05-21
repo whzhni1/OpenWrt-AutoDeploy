@@ -166,7 +166,21 @@ jobs:
           
           echo "✅ 下载: $downloaded 个文件"
           echo "DOWNLOAD_DIR=$DOWNLOAD_DIR" >> $GITHUB_ENV
-          
+
+      - name: 生成 SHA256
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          cd "$DOWNLOAD_DIR"
+          output=""
+          for file in *; do
+            [ -f "$file" ] || continue
+            hash=$(sha256sum "$file" | awk '{print $1}')
+            output+="$file"$'\n'"sha256:$hash"$'\n\n'
+          done
+          printf '%s' "${output%$'\n'}" > sha256.txt
+          echo "📄 SHA256 已生成:"
+          cat sha256.txt
+
       - name: 并行发布
         id: release
         if: steps.check.outputs.needs_update == 'true'
