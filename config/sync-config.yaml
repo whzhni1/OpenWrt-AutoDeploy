@@ -30,7 +30,6 @@ repositories:
 
   - github_owner: whzhni1
     github_repo: luci-app-lucky
-    local_name: lucky
 
   - github_owner: eamonxg
     github_repo: luci-theme-aurora
