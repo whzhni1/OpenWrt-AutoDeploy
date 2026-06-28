@@ -139,7 +139,7 @@ find_and_install() {
 
 # 获取下载地址
 get_download_url() {
-    echo "$ASSETS_JSON_CACHE" | grep -o "https://[^\"]*$1" | grep -v "sha256" | head -1 | sed 's/api\.gitcode/gitcode/g'
+    echo "$ASSETS_JSON_CACHE" | grep -o "https://[^\"]*$1" | grep -v "sha256" | grep -v "\\\\n" | head -1 | sed 's/api\.gitcode/gitcode/g'
 }
 
 # 下载并安装
