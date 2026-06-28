@@ -1,6 +1,6 @@
 #!/bin/sh
 
-SCRIPT_VERSION="2.3.2"
+SCRIPT_VERSION="2.3.3"
 LOG_FILE="/tmp/auto-update.log"
 CONFIG_FILE="/etc/auto-setup.conf"
 DEVICE_MODEL="$(cat /tmp/sysinfo/model 2>/dev/null || echo '未知设备')"
@@ -107,7 +107,7 @@ api_get_release() {
 find_and_install() {
     local app="$1"
 
-    local all_files=$(echo "$ASSETS_JSON_CACHE" | grep -o "\"[^\"]*${PKG_EXT}\"" | tr -d '"' | grep -v "/")
+    local all_files=$(echo "$ASSETS_JSON_CACHE" | grep -o "\"[^\"]*${PKG_EXT}\"" | tr -d '"' | grep -v "/" | grep -v "sha256")
     [ -z "$all_files" ] && { log "✗ 未找到文件"; return 1; }
     log "  共 $(echo "$all_files" | wc -l) 个文件"
     
@@ -139,7 +139,7 @@ find_and_install() {
 
 # 获取下载地址
 get_download_url() {
-    echo "$ASSETS_JSON_CACHE" | grep -o "https://[^\"]*$1" | head -1 | sed 's/api\.gitcode/gitcode/g'
+    echo "$ASSETS_JSON_CACHE" | grep -o "https://[^\"]*$1" | grep -v "sha256" | head -1 | sed 's/api\.gitcode/gitcode/g'
 }
 
 # 下载并安装
