@@ -5,13 +5,13 @@ START=99
 SETUP="/etc/init.d/auto-setup"
 LOG="/tmp/auto-setup-fetch.log"
 
-PACKAGES="luci-theme-aurora luci-app-passwall2 luci-app-vnt2"  # 安装luci-theme-aurora luci-app-passwall2 luci-app-vnt2
+PACKAGES="luci-app-passwall2 luci-app-vnt2 luci-app-lucky"  # 安装luci-app-passwall2 luci-app-vnt2 luci-app-lucky
 INSTALL_PRIORITY="1"            # 安装策略 (第三方优先)
 
 SCRIPT_URLS="https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup
-https://raw.gitcode.com/whzhni/OpenWrt-AutoDeploy/raw/main/auto-setup≈abc
+https://raw.gitcode.com/whzhni/OpenWrt-AutoDeploy/raw/main/auto-setup≈abc  # gitcode配置访问令牌abc
 https://gitee.com/whzhni/OpenWrt-AutoDeploy/raw/main/auto-setup"
-# gitcode配置访问令牌abc
+
 log() { echo "[$(date '+%F %T')] $1"; }
 start() {
     (
