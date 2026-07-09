@@ -155,12 +155,22 @@ EOF
 
 # 检查已安装
 is_installed() {
-    $PKG_LIST_INSTALLED 2>/dev/null | grep -q "^$1 "
+    local pkg="$1"
+    if [ "$PKG_TYPE" = "apk" ]; then
+        apk info "$pkg" >/dev/null 2>&1
+    else
+        $PKG_LIST_INSTALLED 2>/dev/null | grep -q "^$pkg "
+    fi
 }
 
 # 检查包存在
 pkg_exists() {
-    $PKG_LIST "$1" 2>/dev/null | grep -q "^$1"
+    local pkg="$1"
+    if [ "$PKG_TYPE" = "apk" ]; then
+        apk search "^$pkg$" 2>/dev/null | grep -q "^${pkg}-[0-9]"
+    else
+        $PKG_LIST "$pkg" 2>/dev/null | grep -q "^$pkg"
+    fi
 }
 
 # 安装语言包
@@ -202,26 +212,26 @@ install_official() {
     local list="$1"
     log "从官方源安装..."
     [ -z "$list" ] && { log "无需安装"; return; }
-    
+
     log "包数量: $(echo $list | wc -w) 个"
-    
+
     local ok=0 fail=0 skip=0
     PENDING_PACKAGES=""
-    
+
     for pkg in $list; do
         [ -z "$pkg" ] && continue
-        
-        is_installed "$pkg" && {
+
+        if is_installed "$pkg"; then
             log "⊝ $pkg 已安装"
             skip=$((skip+1))
-        } || install_pkg "$pkg" && {
+        elif install_pkg "$pkg"; then
             ok=$((ok+1))
-        } || {
+        else
             PENDING_PACKAGES="$PENDING_PACKAGES $pkg"
             fail=$((fail+1))
-        }
+        fi
     done
-    
+
     PENDING_PACKAGES=$(echo "$PENDING_PACKAGES" | xargs)
     log "安装完成: 成功 $ok, 失败 $fail, 跳过 $skip"
     [ -n "$PENDING_PACKAGES" ] && log "失败包: $PENDING_PACKAGES"
