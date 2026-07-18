@@ -1,6 +1,6 @@
 
 luci-app-lucky|v2.0.6
-luci-app-openclash|v0.47.116
+luci-app-openclash|v0.47.133
 luci-app-passwall2|v26.7.16-1
 luci-app-passwall|v26.7.16-1
 luci-app-vnt2|v1.6.5
