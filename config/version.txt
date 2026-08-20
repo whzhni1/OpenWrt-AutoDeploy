@@ -2,7 +2,7 @@
 luci-app-harbor-file|v1.0.3
 luci-app-lucky|v2.0.7
 luci-app-openclash|v0.47.156
-luci-app-passwall2|v26.8.17-1
+luci-app-passwall2|v26.8.20-1
 luci-app-passwall|v26.8.19-2
 luci-app-vnt2|v1.6.6
 luci-theme-aurora|v1.2.0
