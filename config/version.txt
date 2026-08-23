@@ -10,4 +10,4 @@ openlist2|v4.2.5
 openlist|v4.2.1
 tailscale|v1.102.3
 vnts|v2.0.1
-vnt|v2.0.1
+vnt|v2.0.2
