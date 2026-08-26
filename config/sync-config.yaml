@@ -60,5 +60,5 @@ repositories:
     platforms: gitlab gitee r2
     prerelease: true
 
-  - github_owner: destan19
+  - github_owner: whzhni1
     github_repo: luci-app-harbor-file
