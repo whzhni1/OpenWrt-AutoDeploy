@@ -1,5 +1,5 @@
 
-luci-app-harbor-file|v1.0.3
+luci-app-harbor-file|v1.0.4
 luci-app-lucky|v2.0.7
 luci-app-openclash|v0.47.156
 luci-app-passwall2|v26.8.20-1
@@ -10,4 +10,4 @@ openlist2|v4.2.5
 openlist|v4.2.1
 tailscale|v1.102.3
 vnts|v2.0.2
-vnt|v2.0.3
+vnt|v2.0.4
