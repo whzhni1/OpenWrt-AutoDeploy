@@ -61,4 +61,4 @@ repositories:
     prerelease: true
 
   - github_owner: whzhni1
-    github_repo: luci-app-harbor-file
+    github_repo: luci-app-harbor-file-pro
