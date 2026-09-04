@@ -1,4 +1,4 @@
-luci-app-harbor-file-pro|v1.0.1
+luci-app-harbor-file-pro|v1.0.0
 luci-app-lucky|v2.0.7
 luci-app-openclash|v0.47.156
 luci-app-passwall2|v26.9.2-1
