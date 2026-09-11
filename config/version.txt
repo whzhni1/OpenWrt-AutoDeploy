@@ -7,6 +7,6 @@ luci-app-vnt2|v1.6.9
 luci-theme-aurora|v1.3.0
 openlist2|v4.2.6
 openlist|v4.2.1
-tailscale|v1.102.3
+tailscale|v1.102.4
 vnts|v2.0.5
 vnt|v2.0.8
