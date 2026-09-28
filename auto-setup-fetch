@@ -5,7 +5,7 @@ START=99
 SETUP="/etc/init.d/auto-setup"
 LOG="/tmp/auto-setup-fetch.log"
 
-PACKAGES="luci-app-passwall2 luci-app-vnt2 luci-app-lucky"  # 安装luci-app-passwall2 luci-app-vnt2 luci-app-lucky
+PACKAGES="luci-app-harbor-file-pro luci-app-vnt2 luci-app-lucky"  # 安装luci-app-harbor-file-pro luci-app-vnt2 luci-app-lucky
 INSTALL_PRIORITY="1"            # 安装策略 (第三方优先)
 
 SCRIPT_URLS="https://gitlab.com/whzhni/OpenWrt-AutoDeploy/-/raw/main/auto-setup
