@@ -25,7 +25,10 @@ repositories:
     
   - github_owner: whzhni1
     github_repo: luci-app-tailscale
-    local_name: tailscale
+    platforms: gitlab r2
+
+  - github_owner: whzhni1
+    github_repo: tailscale
     platforms: gitlab r2
 
   - github_owner: whzhni1
@@ -48,16 +51,16 @@ repositories:
 
   - github_owner: whzhni1
     github_repo: luci-app-vnt2
-    platforms: gitlab gitee r2
+    platforms: gitlab r2
     
   - github_owner: vnt-dev
     github_repo: vnt
-    platforms: gitlab gitee r2
+    platforms: gitlab r2
     prerelease: true
     
   - github_owner: vnt-dev
     github_repo: vnts
-    platforms: gitlab gitee r2
+    platforms: gitlab r2
     prerelease: true
 
   - github_owner: whzhni1
