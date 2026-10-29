@@ -1,5 +1,5 @@
 7luci-app-harbor-file-pro|v1.0.4
-luci-app-harbor-file-pro|v1.0.9
+luci-app-harbor-file-pro|v1.1.0
 luci-app-lucky|v2.1.4
 luci-app-openclash|v0.48.002
 luci-app-passwall2|v26.10.29-1
@@ -9,6 +9,6 @@ luci-app-vnt2|v1.7.6
 luci-theme-aurora|v1.4.0
 openlist2|v4.2.6
 openlist|v4.2.1
-tailscale|v1.104.2
+tailscale|v1.104.4
 vnts|v2.0.8
 vnt|v2.0.11
